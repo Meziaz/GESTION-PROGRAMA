@@ -20,6 +20,17 @@ const positiveOrNull = (value) => {
   return number !== null && number > 0 ? number : null;
 };
 
+const MAX_TASK_DURATION_DAYS = 365;
+
+// Texto libre de tareas (nombre, entregable): al menos la mitad de los caracteres deben ser letras reales.
+// Rechaza cosas como "empezar04953-.-¨$%¨$%()=)=?)¿¨:!" o "=?¿?=¿,-¸:-¨^*¨^*" que sí tienen alguna letra pero son basura.
+const hasReasonableLetterRatio = (value, minRatio = 0.5) => {
+  const clean = String(value ?? '').replace(/\s/g, '');
+  if (clean.length === 0) return false;
+  const letters = (clean.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑ]/g) ?? []).length;
+  return letters / clean.length >= minRatio;
+};
+
 export const normalizePredecessors = (value) => {
   const values = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
   return [...new Set(values.map((item) => String(item).trim()).filter(Boolean))];
@@ -154,10 +165,15 @@ export const validateActivityNetwork = (rawActivities = []) => {
     const rawId = raw.id ?? raw.task_id;
     const name = getActivityName(raw);
     if (!name) errors.push(`La tarea ${activity.id} no tiene nombre.`);
+    else if (!hasReasonableLetterRatio(name)) errors.push(`El nombre de la tarea ${activity.id} debe ser texto real, no una mezcla de números y símbolos.`);
     if (rawId === undefined || rawId === null || String(rawId).trim() === '') {
       errors.push(`La tarea ${activity.id} debe tener un identificador.`);
+    } else if (!/^[A-Za-z0-9_-]+$/.test(String(rawId).trim())) {
+      errors.push(`El identificador "${rawId}" solo puede contener letras, números, guiones y guion bajo.`);
     }
-    if (!String(raw.deliverable ?? raw.output ?? '').trim()) warnings.push(`La tarea ${activity.id} no tiene un entregable definido.`);
+    const deliverable = String(raw.deliverable ?? raw.output ?? '').trim();
+    if (!deliverable) errors.push(`La tarea ${activity.id} no tiene un entregable definido.`);
+    else if (!hasReasonableLetterRatio(deliverable)) errors.push(`El entregable de la tarea ${activity.id} debe ser texto real, no una mezcla de números y símbolos.`);
 
     const optimistic = firstNumber(raw.optimal_time, raw.optimistic_time, raw.optimisticTime, raw.a);
     const estimated = firstNumber(raw.estimated_time, raw.most_likely_time, raw.mostLikelyTime, raw.estimatedTime, raw.m);
@@ -174,6 +190,11 @@ export const validateActivityNetwork = (rawActivities = []) => {
     }
     if (optimistic !== null && estimated !== null && pessimistic !== null && (optimistic > estimated || estimated > pessimistic)) {
       errors.push(`La tarea ${activity.id} debe cumplir optimista ≤ estimado ≤ pesimista.`);
+    }
+    for (const [label, timeValue] of [['optimista', optimistic], ['estimado', estimated], ['pesimista', pessimistic]]) {
+      if (timeValue !== null && timeValue > MAX_TASK_DURATION_DAYS) {
+        errors.push(`El tiempo ${label} de la tarea ${activity.id} no puede superar ${MAX_TASK_DURATION_DAYS} días — revisa si escribiste un cero de más.`);
+      }
     }
     if (!positiveOrNull(activity.duration_days)) errors.push(`La duración esperada de la tarea ${activity.id} debe ser mayor que cero.`);
 

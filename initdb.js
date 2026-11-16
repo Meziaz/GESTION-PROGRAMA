@@ -92,19 +92,10 @@ async function initializeDatabase() {
       console.log(`   ✓ ${row.tablename}`);
     });
 
-    // Count records in each table
-    console.log('\n📈 Datos de ejemplo:');
+    // Count records
+    console.log('\n📈 Datos:');
     const projectCount = await client.query('SELECT COUNT(*) FROM projects');
-    const phaseCount = await client.query('SELECT COUNT(*) FROM wbs_phases');
-    const activityCount = await client.query('SELECT COUNT(*) FROM wbs_activities');
-    const teamCount = await client.query('SELECT COUNT(*) FROM team_members');
-    const cutDateCount = await client.query('SELECT COUNT(*) FROM cut_dates');
-
     console.log(`   ✓ Proyectos: ${projectCount.rows[0].count}`);
-    console.log(`   ✓ Fases WBS: ${phaseCount.rows[0].count}`);
-    console.log(`   ✓ Actividades: ${activityCount.rows[0].count}`);
-    console.log(`   ✓ Miembros de equipo: ${teamCount.rows[0].count}`);
-    console.log(`   ✓ Fechas de corte: ${cutDateCount.rows[0].count}`);
 
     await client.end();
     console.log('\n✅ Base de datos inicializada correctamente!');

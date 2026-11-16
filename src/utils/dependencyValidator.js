@@ -105,6 +105,13 @@ export const validateActivityCosts = (activities = []) => {
         cost: rawActivity?.cost ?? rawActivity?.estimated_cost ?? rawActivity?.estimatedCost,
         issue: 'El costo debe ser un número no negativo',
       });
+    } else if (hasCost && Number.isFinite(rawCost) && rawCost > 10000000) {
+      invalidCosts.push({
+        activityId: activity.id,
+        activityName: activityName(rawActivity),
+        cost: rawActivity?.cost ?? rawActivity?.estimated_cost ?? rawActivity?.estimatedCost,
+        issue: 'El costo no puede superar los $10,000,000 (revisa si escribiste un cero de más)',
+      });
     }
   });
   return { isValid: invalidCosts.length === 0, invalidCosts };
@@ -127,7 +134,7 @@ export const validateAllActivities = (activities = []) => {
     errors.push(`Duraciones inválidas: ${durations.invalidDurations.map((item) => `${item.activityName} (${item.duration})`).join(', ')}`);
   }
   if (!costs.isValid) {
-    errors.push(`Costos inválidos: ${costs.invalidCosts.map((item) => `${item.activityName} ($${item.cost})`).join(', ')}`);
+    errors.push(`Costos inválidos: ${costs.invalidCosts.map((item) => `${item.activityName} ($${item.cost}) — ${item.issue}`).join(', ')}`);
   }
   const warnings = [...network.warnings];
   if (orphaned.orphaned.length > 0) {

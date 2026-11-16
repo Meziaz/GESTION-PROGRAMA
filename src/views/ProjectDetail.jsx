@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Plus, Loader, ChevronDown, ChevronUp, LayoutDashboard, CalendarDays, BarChart3, Network } from 'lucide-react';
+import { ArrowLeft, Plus, Loader, ChevronDown, ChevronUp, LayoutDashboard, CalendarDays, BarChart3, Network, ClipboardList, Users2, FileText, Layers } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -20,9 +20,15 @@ import {
   getStatusBadgeColor,
   getStatusLabel,
 } from '../utils/evmCalculations';
-import { getProject, addCutDate, saveCutDate, deleteCutDate, saveProject } from '../utils/storageManager';
+import { getProject, addCutDate, saveProject } from '../utils/storageManager';
+import { filterDecimal } from '../utils/inputFilters';
 import { ProjectHeaderInfo, TeamMembersInfo, ProjectMetadata } from '../utils/projectDetailComponents';
 import { WBSValidationPanel, CriticalPathPanel, CronogramaPanel, DiccionarioEDTPanel } from '../utils/wbsValidationUI';
+import { DiagnosticoPanel } from '../utils/diagnosticoPanel';
+import { RaciPanel } from '../utils/raciPanel';
+import { ActaPanel } from '../utils/actaPanel';
+import { BlueprintPanel } from '../utils/blueprintPanel';
+import { AlertModal } from '../utils/AlertModal';
 
 const parseLocalDate = (value) => {
   const normalized = String(value ?? '').slice(0, 10);
@@ -50,8 +56,6 @@ export default function ProjectDetail({ projectId, onBack }) {
     cut_date: localDateString(),
     actual_percentage: 0,
     actual_cost: 0,
-    mtbf: null,
-    dre: null,
   });
   const [cutDateError, setCutDateError] = useState(''); // Nueva
   const [activeSection, setActiveSection] = useState('overview');
@@ -62,8 +66,8 @@ export default function ProjectDetail({ projectId, onBack }) {
     loadProjectData();
   }, [projectId]);
 
-  const loadProjectData = () => {
-    const proj = getProject(projectId);
+  const loadProjectData = async () => {
+    const proj = await getProject(projectId);
     if (!proj) {
       setProject(null);
       setLoading(false);
@@ -192,7 +196,7 @@ export default function ProjectDetail({ projectId, onBack }) {
     generateChart(project, index);
   };
 
-  const handleAddCutDate = () => {
+  const handleAddCutDate = async () => {
     if (!project) {
       setCutDateError('No se encontró el proyecto.');
       return;
@@ -222,14 +226,6 @@ export default function ProjectDetail({ projectId, onBack }) {
       setCutDateError('El costo real debe ser un número no negativo.');
       return;
     }
-    if (newCutDate.mtbf !== null && newCutDate.mtbf !== '' && (!Number.isFinite(Number(newCutDate.mtbf)) || Number(newCutDate.mtbf) < 0)) {
-      setCutDateError('MTBF debe ser un número no negativo.');
-      return;
-    }
-    if (newCutDate.dre !== null && newCutDate.dre !== '' && (!Number.isFinite(Number(newCutDate.dre)) || Number(newCutDate.dre) < 0 || Number(newCutDate.dre) > 100)) {
-      setCutDateError('DRE debe estar entre 0 y 100.');
-      return;
-    }
     if (project.cut_dates?.some((cd) => cd.cut_date === newCutDate.cut_date)) {
       setCutDateError(`Ya existe una fecha de corte en ${newCutDate.cut_date}.`);
       return;
@@ -251,18 +247,16 @@ export default function ProjectDetail({ projectId, onBack }) {
     };
 
     try {
-      const savedCutDate = addCutDate(projectId, cutDateData);
+      const savedCutDate = await addCutDate(projectId, cutDateData);
       if (!savedCutDate) throw new Error('No se pudo guardar la fecha de corte.');
       setCutDateError('');
       setNewCutDate({
         cut_date: localDateString(),
         actual_percentage: 0,
         actual_cost: 0,
-        mtbf: null,
-        dre: null,
       });
       setShowCutDateForm(false);
-      loadProjectData();
+      await loadProjectData();
     } catch (error) {
       setCutDateError(`No se pudo guardar la fecha de corte: ${error.message}`);
     }
@@ -275,7 +269,7 @@ export default function ProjectDetail({ projectId, onBack }) {
     }));
   };
 
-  const updateActivityProgress = (phaseIndex, activityIndex, progress) => {
+  const updateActivityProgress = async (phaseIndex, activityIndex, progress) => {
     if (!project?.wbs_phases?.[phaseIndex]?.activities?.[activityIndex]) return;
     const normalizedProgress = Math.min(100, Math.max(0, Number(progress) || 0));
     const newProject = {
@@ -290,8 +284,8 @@ export default function ProjectDetail({ projectId, onBack }) {
           }),
     };
     try {
-      saveProject(newProject);
-      setProject(newProject);
+      const saved = await saveProject(newProject);
+      setProject(saved);
     } catch (error) {
       setCutDateError(`No se pudo actualizar el avance: ${error.message}`);
     }
@@ -331,22 +325,53 @@ export default function ProjectDetail({ projectId, onBack }) {
     (total, phase) => total + (Array.isArray(phase?.activities) ? phase.activities.length : 0),
     0,
   );
-  const detailSections = [
-    { id: 'overview', label: 'Resumen', icon: LayoutDashboard },
-    { id: 'schedule', label: 'Cronograma', icon: CalendarDays },
-    { id: 'tracking', label: 'Seguimiento', icon: BarChart3 },
-    { id: 'wbs', label: 'WBS', icon: Network },
+  const sectionGroups = [
+    {
+      label: 'Planificación',
+      items: [
+        // Ocultas temporalmente para la defensa (no se borró el código, solo no se muestran):
+        // { id: 'diagnostico', label: 'Diagnóstico', icon: ClipboardList },
+        // { id: 'blueprint', label: 'Blueprint', icon: Layers },
+        { id: 'wbs', label: 'WBS', icon: Network },
+        { id: 'raci', label: 'RACI', icon: Users2 },
+      ],
+    },
+    {
+      label: 'Ejecución y Cierre',
+      items: [
+        { id: 'schedule', label: 'Cronograma', icon: CalendarDays },
+        { id: 'overview', label: 'Resumen', icon: LayoutDashboard },
+        // Ocultas temporalmente para la defensa (no se borró el código, solo no se muestran):
+        // { id: 'tracking', label: 'Seguimiento', icon: BarChart3 },
+        // { id: 'acta', label: 'Acta de Constitución', icon: FileText },
+      ],
+    },
   ];
+
+  const handleSaveDiagnostico = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveBlueprint = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveRaci = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between print:hidden">
         <div>
           <div className="flex items-center gap-4 mb-4">
             <button
               onClick={onBack}
-              className="flex items-center gap-2 text-indigo-600 hover:text-indigo-900 font-medium"
+              className="flex items-center gap-2 text-blueprint-600 hover:text-blueprint-900 font-medium"
             >
               <ArrowLeft size={20} />
               Volver
@@ -367,6 +392,7 @@ export default function ProjectDetail({ projectId, onBack }) {
           </div>
         </div>
 
+        {/* Oculto temporalmente para la defensa junto con la pestaña "Seguimiento" (no se borró el código):
         <button
           onClick={() => {
             setActiveSection('tracking');
@@ -375,33 +401,50 @@ export default function ProjectDetail({ projectId, onBack }) {
               cutDateFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }, 100);
           }}
-          className="flex w-full items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium sm:w-auto"
+          className="flex w-full items-center justify-center gap-2 bg-blueprint-600 text-white px-6 py-3 rounded-lg hover:bg-blueprint-700 transition-colors font-medium sm:w-auto"
         >
           <Plus size={20} />
           Agregar Fecha de Corte
         </button>
+        */}
       </div>
 
-      <nav className="grid grid-cols-2 gap-2 rounded-xl border border-gray-200 bg-white p-2 shadow-sm sm:grid-cols-4" aria-label="Secciones del proyecto">
-        {detailSections.map((section) => {
-          const Icon = section.icon;
-          const isActive = activeSection === section.id;
-          return (
-            <button
-              key={section.id}
-              type="button"
-              onClick={() => setActiveSection(section.id)}
-              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
-                isActive ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-indigo-50 hover:text-indigo-700'
-              }`}
-              aria-current={isActive ? 'page' : undefined}
-            >
-              <Icon size={17} />
-              {section.label}
-            </button>
-          );
-        })}
+      <nav className="space-y-3 rounded-lg border border-gray-200 bg-white p-3  print:hidden" aria-label="Secciones del proyecto">
+        {sectionGroups.map((group, groupIndex) => (
+          <div key={group.label}>
+            <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-ink-soft">{group.label}</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {group.items.map((section) => {
+                const Icon = section.icon;
+                const isActive = activeSection === section.id;
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => setActiveSection(section.id)}
+                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
+                      isActive ? 'bg-blueprint-600 text-white ' : 'text-gray-600 hover:bg-blueprint-50 hover:text-blueprint-700'
+                    }`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <Icon size={17} />
+                    {section.label}
+                  </button>
+                );
+              })}
+            </div>
+            {groupIndex < sectionGroups.length - 1 && <hr className="mt-3 border-gray-200" />}
+          </div>
+        ))}
       </nav>
+
+      {activeSection === 'diagnostico' && (
+        <DiagnosticoPanel project={project} onSave={handleSaveDiagnostico} />
+      )}
+
+      {activeSection === 'blueprint' && (
+        <BlueprintPanel project={project} onSave={handleSaveBlueprint} />
+      )}
 
       {activeSection === 'overview' && (
         <div className="space-y-6">
@@ -430,13 +473,13 @@ export default function ProjectDetail({ projectId, onBack }) {
       {activeSection === 'tracking' && (
         <div className="space-y-6">
           {!showCutDateForm && (!project.cut_dates || project.cut_dates.length === 0) && (
-            <div className="rounded-xl border border-dashed border-gray-300 bg-white p-8 text-center">
+            <div className="rounded-lg border border-dashed border-paper-line bg-white p-8 text-center">
               <h3 className="text-lg font-semibold text-gray-900">Aún no hay seguimiento registrado</h3>
               <p className="mt-2 text-sm text-gray-600">Agrega una fecha de corte para visualizar el progreso del proyecto.</p>
               <button
                 type="button"
                 onClick={() => setShowCutDateForm(true)}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blueprint-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blueprint-700"
               >
                 <Plus size={16} />
                 Agregar primera fecha
@@ -457,12 +500,7 @@ export default function ProjectDetail({ projectId, onBack }) {
             <p className="text-xs text-gray-600 mt-1">La fecha de corte debe estar entre estas dos fechas</p>
           </div>
 
-          {/* Mostrar mensaje de error si existe */}
-          {cutDateError && (
-            <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded-lg">
-              <p className="text-sm text-red-700">{cutDateError}</p>
-            </div>
-          )}
+          <AlertModal type="error" message={cutDateError} onClose={() => setCutDateError('')} />
 
           <div className="grid grid-cols-1 gap-4 mb-4 md:grid-cols-3">
             <div>
@@ -476,55 +514,29 @@ export default function ProjectDetail({ projectId, onBack }) {
                   setNewCutDate({ ...newCutDate, cut_date: e.target.value });
                   setCutDateError(''); // Limpiar error al cambiar fecha
                 }}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
+                className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
               />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">% Completado</label>
               <input
-                type="number"
-                min="0"
-                max="100"
+                type="text"
+                inputMode="decimal"
                 value={newCutDate.actual_percentage}
-                onChange={(e) => setNewCutDate({ ...newCutDate, actual_percentage: e.target.value })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
+                onChange={(e) => setNewCutDate({ ...newCutDate, actual_percentage: filterDecimal(e.target.value) })}
+                className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
               />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Costo Real (USD)</label>
               <input
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 value={newCutDate.actual_cost}
-                onChange={(e) => setNewCutDate({ ...newCutDate, actual_cost: e.target.value })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">MTBF (Horas) - Opcional</label>
-              <input
-                type="number"
-                min="0"
-                placeholder="Mean Time Between Failures"
-                value={newCutDate.mtbf ?? ''}
-                onChange={(e) => setNewCutDate({ ...newCutDate, mtbf: e.target.value ? parseFloat(e.target.value) : null })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">DRE (%) - Opcional</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                placeholder="Drill Rate of Expenditure"
-                value={newCutDate.dre ?? ''}
-                onChange={(e) => setNewCutDate({ ...newCutDate, dre: e.target.value ? parseFloat(e.target.value) : null })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
+                onChange={(e) => setNewCutDate({ ...newCutDate, actual_cost: filterDecimal(e.target.value) })}
+                className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
               />
             </div>
           </div>
@@ -532,7 +544,7 @@ export default function ProjectDetail({ projectId, onBack }) {
           <div className="flex gap-4">
             <button
               onClick={handleAddCutDate}
-              className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+              className="flex-1 bg-blueprint-600 text-white px-4 py-2 rounded-lg hover:bg-blueprint-700 transition-colors font-medium"
             >
               Guardar Fecha de Corte
             </button>
@@ -549,7 +561,7 @@ export default function ProjectDetail({ projectId, onBack }) {
 
       {/* Cut Dates List */}
       {project.cut_dates && project.cut_dates.length > 0 && (
-        <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="bg-white rounded-lg shadow-sm border-0 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Fechas de Corte Registradas</h3>
           <p className="text-sm text-gray-600 mb-4">Selecciona una fecha de corte para ver los cálculos, gráfico y análisis</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -558,8 +570,8 @@ export default function ProjectDetail({ projectId, onBack }) {
                 key={cutDate.id} 
                 className={`cursor-pointer rounded-lg p-4 border-2 transition-all ${
                   selectedCutDateIndex === index 
-                    ? 'bg-indigo-50 border-indigo-500' 
-                    : 'bg-gradient-to-br from-blue-50 to-indigo-50 border-indigo-200 hover:border-indigo-400'
+                    ? 'bg-blueprint-50 border-blueprint-500' 
+                    : 'bg-blueprint-50 border-blueprint-200 hover:border-blueprint-400'
                 }`}
               >
                 <input 
@@ -585,7 +597,7 @@ export default function ProjectDetail({ projectId, onBack }) {
           {/* Metrics Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Column 1: Base Values */}
-            <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="bg-white rounded-lg shadow-sm border-0 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Valores Base</h3>
               <div className="space-y-4">
                 <div>
@@ -611,7 +623,7 @@ export default function ProjectDetail({ projectId, onBack }) {
             </div>
 
             {/* Column 2: Variations */}
-            <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="bg-white rounded-lg shadow-sm border-0 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Variaciones</h3>
               <div className="space-y-4">
                 <div>
@@ -661,7 +673,7 @@ export default function ProjectDetail({ projectId, onBack }) {
             </div>
 
             {/* Column 3: Forecasts */}
-            <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="bg-white rounded-lg shadow-sm border-0 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Pronósticos y Predicciones</h3>
               <div className="space-y-4">
                 <div>
@@ -715,7 +727,7 @@ export default function ProjectDetail({ projectId, onBack }) {
           </div>
 
           {/* S-Curve Chart */}
-          <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="bg-white rounded-lg shadow-sm border-0 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Curva S - EVM</h3>
             <div style={{ width: '100%', height: 380 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -841,7 +853,7 @@ export default function ProjectDetail({ projectId, onBack }) {
         <div className="space-y-6">
           {/* WBS */}
       {project.wbs_phases && project.wbs_phases.length > 0 && (
-        <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="bg-white rounded-lg shadow-sm border-0 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Estructura de Desglose de Trabajo (WBS)</h3>
           <p className="mb-4 text-sm text-gray-600">Consulta las tareas, responsables, dependencias y avance de cada fase.</p>
           <div className="space-y-3">
@@ -852,7 +864,7 @@ export default function ProjectDetail({ projectId, onBack }) {
                   className="w-full px-4 py-4 flex items-center justify-between hover:bg-gray-100 transition-colors"
                 >
                   <div className="flex items-center gap-3 flex-1">
-                    <div className="bg-indigo-100 text-indigo-700 font-bold px-3 py-1 rounded text-sm">
+                    <div className="bg-blueprint-100 text-blueprint-700 font-bold px-3 py-1 rounded text-sm">
                       {phase.phase_order}
                     </div>
                     <div className="text-left">
@@ -876,7 +888,7 @@ export default function ProjectDetail({ projectId, onBack }) {
                           <th className="px-3 py-2 text-left font-medium text-gray-700">Entregable</th>
                           <th className="px-3 py-2 text-right font-medium text-gray-700">Duración</th>
                           <th className="px-3 py-2 text-right font-medium text-gray-700">Costo</th>
-                          <th className="px-3 py-2 text-left font-medium text-gray-700">Rol Asignado</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-700">Responsable</th>
                           <th className="px-3 py-2 text-left font-medium text-gray-700">Predecesoras</th>
                           <th className="px-3 py-2 text-center font-medium text-gray-700">% Avance</th>
                         </tr>
@@ -889,8 +901,8 @@ export default function ProjectDetail({ projectId, onBack }) {
                             <td className="px-3 py-2 text-right text-gray-700">{activity.duration_days}d</td>
                             <td className="px-3 py-2 text-right text-gray-900">{formatCurrency(activity.cost)}</td>
                             <td className="px-3 py-2 text-sm">
-                              <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                {activity.assigned_role || 'N/A'}
+                              <span className="bg-blueprint-100 text-blueprint-800 px-2 py-1 rounded">
+                                {activity.responsable || 'N/A'}
                               </span>
                             </td>
                             <td className="px-3 py-2 text-sm">
@@ -904,12 +916,11 @@ export default function ProjectDetail({ projectId, onBack }) {
                             </td>
                             <td className="px-3 py-2 text-center">
                               <input
-                                type="number"
-                                min="0"
-                                max="100"
+                                type="text"
+                                inputMode="decimal"
                                 value={activity.progress_percentage}
-                                onChange={(e) => updateActivityProgress(phaseIndex, actIndex, parseFloat(e.target.value) || 0)}
-                                className="w-16 px-2 py-1 border border-gray-300 rounded text-center text-sm focus:ring-2 focus:ring-indigo-600 focus:border-transparent outline-none"
+                                onChange={(e) => updateActivityProgress(phaseIndex, actIndex, parseFloat(filterDecimal(e.target.value)) || 0)}
+                                className="w-16 px-2 py-1 border border-paper-line rounded text-center text-sm focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
                               />
                               %
                             </td>
@@ -925,6 +936,14 @@ export default function ProjectDetail({ projectId, onBack }) {
         </div>
       )}
         </div>
+      )}
+
+      {activeSection === 'raci' && (
+        <RaciPanel project={project} onSave={handleSaveRaci} />
+      )}
+
+      {activeSection === 'acta' && (
+        <ActaPanel project={project} />
       )}
     </div>
   );

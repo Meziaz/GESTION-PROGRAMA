@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle, Download, ListChecks } from 'lucide-react';
-import { normalizeActivity, validateProjectSchedule } from './criticalPathService';
+import { normalizeActivity, validateProjectSchedule, addCalendarDays } from './criticalPathService';
 import { validateAllActivities } from './dependencyValidator';
 
 const collectActivities = (project) => {
@@ -21,6 +21,7 @@ const collectActivities = (project) => {
 };
 
 const formatNumber = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(2).replace(/\.00$/, '') : '—';
+const formatFixed2 = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—';
 const formatDateValue = (value) => value || 'Sin fecha';
 
 const downloadCsv = (filename, headers, rows) => {
@@ -110,12 +111,12 @@ export function CriticalPathPanel({ project }) {
   const lastTask = result.schedule.find((task) => task.id === result.criticalPath[result.criticalPath.length - 1]);
   const criticalTaskCount = new Set(paths.flat()).size;
   return (
-    <div className="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
+    <div className="bg-blueprint-50 border-l-4 border-blueprint-500 p-4 rounded">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="font-semibold text-blue-900">Ruta crítica del proyecto</p>
-          <p className="text-sm text-blue-800 mt-1">Duración PERT calculada: <strong>{formatNumber(result.criticalDuration)} días</strong></p>
-          <p className="text-xs text-blue-700 mt-1">Fecha calculada: {formatDateValue(lastTask?.finish_date)}</p>
+          <p className="font-semibold text-blueprint-900">Ruta crítica del proyecto</p>
+          <p className="text-sm text-blueprint-800 mt-1">Duración PERT calculada: <strong>{formatNumber(result.criticalDuration)} días</strong></p>
+          <p className="text-xs text-blueprint-700 mt-1">Fecha calculada: {formatDateValue(lastTask?.finish_date)}</p>
         </div>
         <span className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded">{criticalTaskCount} tareas</span>
       </div>
@@ -157,44 +158,123 @@ export function CronogramaPanel({ project }) {
   }
   const scheduleRows = [...result.schedule].sort((left, right) => left.early_start - right.early_start || left.id.localeCompare(right.id));
   const downloadRows = scheduleRows.map((task) => [task.id, task.phase_name, task.activity_name, task.start_date, task.finish_date, task.duration_days, task.total_float, task.is_critical ? 'Sí' : 'No']);
+
+  const ROW_HEIGHT = 52;
+  const rowIndexById = new Map(scheduleRows.map((task, index) => [task.id, index]));
+  const bars = scheduleRows.map((task) => {
+    const left = (task.early_start / result.projectDuration) * 100;
+    const width = Math.min(100 - left, Math.max(1.5, (task.duration_days / result.projectDuration) * 100));
+    return { ...task, left, width };
+  });
+  const barById = new Map(bars.map((bar) => [bar.id, bar]));
+
+  const arrows = [];
+  bars.forEach((bar, rowIndex) => {
+    (bar.predecessors ?? []).forEach((predId) => {
+      const predBar = barById.get(predId);
+      const predRow = rowIndexById.get(predId);
+      if (!predBar || predRow === undefined) return;
+      const x1 = predBar.left + predBar.width;
+      const y1 = predRow + 0.5;
+      const x2 = bar.left;
+      const y2 = rowIndex + 0.5;
+      const midX = (x1 + x2) / 2;
+      arrows.push({ key: `${predId}->${bar.id}`, d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`, critical: bar.is_critical && predBar.is_critical });
+    });
+  });
+
+  const AXIS_TICKS = 6;
+  const axisTicks = Array.from({ length: AXIS_TICKS + 1 }, (_, i) => {
+    const dayOffset = Math.round((result.projectDuration * i) / AXIS_TICKS);
+    return { pct: (i / AXIS_TICKS) * 100, date: addCalendarDays(project.start_date, dayOffset) ?? '' };
+  });
+
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
+    <div className="bg-white rounded-lg shadow-sm border-0 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2"><ListChecks size={20} /> Cronograma</h3>
-          <p className="text-sm text-gray-600 mt-1">Barras en rojo: tareas con holgura cero. La red utiliza días calendario.</p>
+          <p className="text-sm text-gray-600 mt-1">Estilo diagrama de Gantt (como ProjectLibre/MS Project). Barras en rojo: tareas con holgura cero (ruta crítica). Las flechas muestran las dependencias.</p>
         </div>
         <button
           type="button"
           onClick={() => downloadCsv('cronograma.csv', ['ID', 'Fase', 'Tarea', 'Inicio', 'Fin', 'Duración PERT', 'Holgura', 'Crítica'], downloadRows)}
-          className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-900 font-medium"
+          className="flex items-center gap-2 text-sm text-blueprint-600 hover:text-blueprint-900 font-medium"
         >
           <Download size={16} /> Descargar cronograma
         </button>
       </div>
       {result.warnings.length > 0 && <div className="mb-4 rounded bg-red-50 border border-red-300 p-3"><ValidationMessages warnings={result.warnings} /></div>}
       <div className="overflow-x-auto">
-        <div className="min-w-[760px]">
-          <div className="grid grid-cols-[240px_1fr] border-b border-gray-200 pb-2 text-xs text-gray-600">
-            <div>Tarea</div>
-            <div className="grid grid-cols-3 text-center"><span>Inicio</span><span>Mitad</span><span>Fin</span></div>
-          </div>
-          {scheduleRows.map((task) => {
-            const left = (task.early_start / result.projectDuration) * 100;
-            const width = Math.min(100 - left, Math.max(1.5, (task.duration_days / result.projectDuration) * 100));
-            return (
-              <div key={task.id} className="grid grid-cols-[240px_1fr] items-center border-b border-gray-100 py-2 gap-3">
-                <div className="min-w-0">
-                  <p className={`text-sm font-medium truncate ${task.is_critical ? 'text-red-700' : 'text-gray-900'}`}>{task.id} · {task.activity_name}</p>
-                  <p className="text-xs text-gray-500">{task.phase_name} · {task.start_date} — {task.finish_date}</p>
-                </div>
-                <div className="relative h-8 bg-gray-100 rounded overflow-hidden">
-                  <div className={`absolute inset-y-1 rounded ${task.is_critical ? 'bg-red-600' : 'bg-indigo-500'}`} style={{ left: `${left}%`, width: `${width}%` }} title={`${task.id}: ${task.duration_days} días`} />
-                </div>
+        <div className="min-w-[900px] flex">
+          {/* Label column */}
+          <div className="w-[260px] shrink-0">
+            <div className="h-8 border-b border-gray-200" />
+            {scheduleRows.map((task) => (
+              <div key={task.id} className="flex flex-col justify-center border-b border-gray-100 pr-3" style={{ height: ROW_HEIGHT }}>
+                <p className={`text-sm font-medium truncate ${task.is_critical ? 'text-red-700' : 'text-gray-900'}`}>{task.id} · {task.activity_name}</p>
+                <p className="text-xs text-gray-500 truncate">{task.phase_name}</p>
               </div>
-            );
-          })}
+            ))}
+          </div>
+
+          {/* Timeline column */}
+          <div className="flex-1 min-w-0">
+            {/* Date axis header */}
+            <div className="relative h-8 border-b border-gray-200">
+              {axisTicks.map((tick) => (
+                <div key={tick.pct} className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${tick.pct}%`, transform: tick.pct === 0 ? 'none' : tick.pct === 100 ? 'translateX(-100%)' : 'translateX(-50%)' }}>
+                  <span className="text-[10px] font-mono text-gray-500 whitespace-nowrap">{tick.date}</span>
+                  <span className="w-px flex-1 bg-gray-200 mt-1" />
+                </div>
+              ))}
+            </div>
+
+            {/* Bars + dependency arrows */}
+            <div className="relative" style={{ height: bars.length * ROW_HEIGHT }}>
+              {axisTicks.map((tick) => (
+                <div key={tick.pct} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${tick.pct}%` }} />
+              ))}
+              <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 100 ${bars.length}`} preserveAspectRatio="none">
+                <defs>
+                  <marker id="arrow-crit" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M0,0 L10,5 L0,10 z" fill="#dc2626" />
+                  </marker>
+                  <marker id="arrow-normal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+                  </marker>
+                </defs>
+                {arrows.map((arrow) => (
+                  <path
+                    key={arrow.key}
+                    d={arrow.d}
+                    fill="none"
+                    stroke={arrow.critical ? '#dc2626' : '#94a3b8'}
+                    strokeWidth="0.25"
+                    vectorEffect="non-scaling-stroke"
+                    markerEnd={arrow.critical ? 'url(#arrow-crit)' : 'url(#arrow-normal)'}
+                  />
+                ))}
+              </svg>
+              {bars.map((bar, rowIndex) => (
+                <div key={bar.id} className="absolute left-0 right-0 border-b border-gray-100" style={{ top: rowIndex * ROW_HEIGHT, height: ROW_HEIGHT }}>
+                  <div
+                    className={`absolute h-6 top-1/2 -translate-y-1/2 rounded flex items-center px-1.5 ${bar.is_critical ? 'bg-red-600' : 'bg-blueprint-500'}`}
+                    style={{ left: `${bar.left}%`, width: `${bar.width}%` }}
+                    title={`${bar.id}: ${bar.start_date} — ${bar.finish_date} (${bar.duration_days} días)`}
+                  >
+                    <span className="text-[10px] text-white font-medium whitespace-nowrap overflow-hidden text-ellipsis">{bar.duration_days}d</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-4 text-xs text-gray-600">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-600" /> Ruta crítica</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-blueprint-500" /> No crítica</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-4 border-t-2 border-gray-400" /> Dependencia (predecesora → tarea)</span>
       </div>
     </div>
   );
@@ -220,7 +300,7 @@ export function DiccionarioEDTPanel({ project }) {
   }
   const downloadRows = rows.map(({ wbs, phase, task, schedule }) => [wbs, task.id, phase, task.activity_name, task.deliverable, task.predecessors.join(' | '), task.optimal_time, task.estimated_time, task.pessimistic_time, schedule?.duration_days ?? task.duration_days, schedule?.start_date ?? '', schedule?.finish_date ?? '', schedule?.total_float ?? '', schedule?.is_critical ? 'Sí' : 'No', task.responsable ?? task.assigned_role ?? '']);
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
+    <div className="bg-white rounded-lg shadow-sm border-0 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-lg font-semibold text-gray-900">Diccionario EDT</h3>
@@ -229,7 +309,7 @@ export function DiccionarioEDTPanel({ project }) {
         <button
           type="button"
           onClick={() => downloadCsv('diccionario-edt.csv', ['EDT', 'ID', 'Fase', 'Tarea', 'Entregable', 'Predecesoras', 'Optimista', 'Estimado', 'Pesimista', 'PERT', 'Inicio', 'Fin', 'Holgura', 'Crítica', 'Responsable'], downloadRows)}
-          className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-900 font-medium"
+          className="flex items-center gap-2 text-sm text-blueprint-600 hover:text-blueprint-900 font-medium"
         >
           <Download size={16} /> Descargar diccionario EDT
         </button>
@@ -239,15 +319,15 @@ export function DiccionarioEDTPanel({ project }) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[1250px]">
           <thead>
-            <tr className="border-b border-gray-200 text-left">
+            <tr className="sticky top-0 z-10 border-b border-gray-200 bg-white text-left shadow-sm">
               <th className="px-2 py-2">EDT</th>
               <th className="px-2 py-2">ID</th>
               <th className="px-2 py-2">Tarea</th>
               <th className="px-2 py-2">Entregable</th>
               <th className="px-2 py-2">Predecesoras</th>
-              <th className="px-2 py-2 text-right">a</th>
-              <th className="px-2 py-2 text-right">m</th>
-              <th className="px-2 py-2 text-right">b</th>
+              <th className="px-2 py-2 text-right">to</th>
+              <th className="px-2 py-2 text-right">te</th>
+              <th className="px-2 py-2 text-right">tp</th>
               <th className="px-2 py-2 text-right">PERT</th>
               <th className="px-2 py-2">Inicio</th>
               <th className="px-2 py-2">Fin</th>
@@ -256,20 +336,20 @@ export function DiccionarioEDTPanel({ project }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ wbs, task, schedule }) => (
-              <tr key={`${wbs}-${task.id}`} className="border-b border-gray-100 hover:bg-gray-50">
+            {rows.map(({ wbs, task, schedule }, rowIndex) => (
+              <tr key={`${wbs}-${task.id}`} className={`border-b border-gray-100 hover:bg-blueprint-50 ${rowIndex % 2 === 1 ? 'bg-gray-50' : 'bg-white'}`}>
                 <td className="px-2 py-2 font-medium text-gray-800">{wbs}</td>
                 <td className="px-2 py-2 font-medium text-gray-900">{task.id}</td>
                 <td className="px-2 py-2 text-gray-900">{task.activity_name}</td>
                 <td className="px-2 py-2 text-gray-700">{task.deliverable || 'Sin definir'}</td>
                 <td className="px-2 py-2 text-gray-700">{task.predecessors.length > 0 ? task.predecessors.join(', ') : 'Inicio'}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(task.optimal_time)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(task.estimated_time)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(task.pessimistic_time)}</td>
-                <td className="px-2 py-2 text-right font-semibold">{formatNumber(schedule?.duration_days ?? task.duration_days)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.optimal_time)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.estimated_time)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.pessimistic_time)}</td>
+                <td className="px-2 py-2 text-right font-semibold tabular-nums">{formatFixed2(schedule?.duration_days ?? task.duration_days)}</td>
                 <td className="px-2 py-2">{formatDateValue(schedule?.start_date)}</td>
                 <td className="px-2 py-2">{formatDateValue(schedule?.finish_date)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(schedule?.total_float)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(schedule?.total_float)}</td>
                 <td className="px-2 py-2">
                   <span className={`px-2 py-1 rounded text-xs font-semibold ${schedule?.is_critical ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700'}`}>
                     {schedule?.is_critical ? 'Crítica' : 'No crítica'}

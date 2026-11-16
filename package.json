@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "server": "node server.js",
     "db:init": "node initdb.js",
-    "db:migrate": "node initdb.js"
+    "db:migrate": "node initdb.js",
+    "db:export": "node scripts/export-db.js",
+    "db:import": "node scripts/import-db.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
