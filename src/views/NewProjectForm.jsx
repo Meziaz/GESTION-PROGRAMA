@@ -3,7 +3,7 @@ import { Trash2, Plus } from 'lucide-react';
 import { saveProject, getProject } from '../utils/storageManager';
 import { validateAllActivities } from '../utils/dependencyValidator';
 import TaskPlanningEditor from '../utils/TaskPlanningEditor';
-import { LETTERS_ONLY_REGEX, filterLettersOnly, filterFreeText, hasReasonableLetterRatio, filterDecimal } from '../utils/inputFilters';
+import { LETTERS_ONLY_REGEX, filterLettersOnly, TITLE_TEXT_REGEX, filterProjectNameText, hasReasonableLetterRatio, filterDecimal } from '../utils/inputFilters';
 import { ConfirmModal } from '../utils/ConfirmModal';
 import { AlertModal } from '../utils/AlertModal';
 
@@ -108,7 +108,7 @@ export default function NewProjectForm({ projectId, editMode = false, onSave, on
 
   const handleProjectNameChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: filterFreeText(value) }));
+    setFormData((prev) => ({ ...prev, [name]: filterProjectNameText(value) }));
   };
 
   const addTeamMember = () => {
@@ -119,16 +119,16 @@ export default function NewProjectForm({ projectId, editMode = false, onSave, on
       setError('El nombre del miembro debe tener entre 2 y 100 caracteres.');
       return;
     }
-    if (!LETTERS_ONLY_REGEX.test(member_name)) {
-      setError('El nombre del miembro solo debe contener letras (sin números ni símbolos).');
+    if (!TITLE_TEXT_REGEX.test(member_name)) {
+      setError('El nombre del miembro contiene caracteres no permitidos.');
       return;
     }
     if (member_role.length < 2 || member_role.length > 100) {
       setError('El rol del miembro debe tener entre 2 y 100 caracteres.');
       return;
     }
-    if (!LETTERS_ONLY_REGEX.test(member_role)) {
-      setError('El rol del miembro solo debe contener letras (sin números ni símbolos).');
+    if (!TITLE_TEXT_REGEX.test(member_role)) {
+      setError('El rol del miembro contiene caracteres no permitidos.');
       return;
     }
     const isDuplicate = formData.team_members.some(
@@ -257,7 +257,7 @@ export default function NewProjectForm({ projectId, editMode = false, onSave, on
       { condition: Boolean(formData.name?.trim()) && formData.name.trim().length < 3, message: 'El nombre del proyecto debe tener al menos 3 caracteres' },
       { condition: (formData.name ?? '').trim().length > 150, message: 'El nombre del proyecto no puede superar los 150 caracteres' },
       { condition: Boolean(formData.name?.trim()) && !hasReasonableLetterRatio(formData.name.trim()), message: 'El nombre del proyecto debe ser texto real, no una mezcla de números y símbolos' },
-      { condition: Boolean(formData.name?.trim()) && filterFreeText(formData.name.trim()) !== formData.name.trim(), message: 'El nombre del proyecto solo puede contener letras y números' },
+      { condition: Boolean(formData.name?.trim()) && filterProjectNameText(formData.name.trim()) !== formData.name.trim(), message: 'El nombre del proyecto contiene caracteres no permitidos' },
       { condition: !formData.description?.trim(), message: 'La descripción es requerida' },
       { condition: Boolean(formData.description?.trim()) && formData.description.trim().length < 10, message: 'La descripción debe tener al menos 10 caracteres' },
       { condition: (formData.description ?? '').trim().length > 2000, message: 'La descripción no puede superar los 2000 caracteres' },
@@ -467,7 +467,7 @@ export default function NewProjectForm({ projectId, editMode = false, onSave, on
                   <input
                     type="text"
                     value={newMember.member_name}
-                    onChange={(e) => setNewMember({ ...newMember, member_name: filterLettersOnly(e.target.value) })}
+                    onChange={(e) => setNewMember({ ...newMember, member_name: filterProjectNameText(e.target.value) })}
                     placeholder="Nombre"
                     maxLength={100}
                     className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
@@ -478,7 +478,7 @@ export default function NewProjectForm({ projectId, editMode = false, onSave, on
                   <input
                     type="text"
                     value={newMember.member_role}
-                    onChange={(e) => setNewMember({ ...newMember, member_role: filterLettersOnly(e.target.value) })}
+                    onChange={(e) => setNewMember({ ...newMember, member_role: filterProjectNameText(e.target.value) })}
                     placeholder="Rol"
                     maxLength={100}
                     className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"

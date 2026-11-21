@@ -4,6 +4,7 @@ import Dashboard from './views/Dashboard';
 import NewProjectForm from './views/NewProjectForm';
 import ProjectDetail from './views/ProjectDetail';
 import { initializeStorage } from './utils/storageManager';
+import { PROJECT_SECTIONS } from './utils/projectSections';
 
 export default function App() {
   const [view, setView] = useState('dashboard');
@@ -11,6 +12,7 @@ export default function App() {
   const [editMode, setEditMode] = useState(false);
   const [storageReady, setStorageReady] = useState(false);
   const [pendingMessage, setPendingMessage] = useState(null);
+  const [activeSection, setActiveSection] = useState('home');
 
   useEffect(() => {
     initializeStorage();
@@ -21,6 +23,7 @@ export default function App() {
     setView(newView);
     if (projectId) {
       setSelectedProjectId(projectId);
+      setActiveSection('home');
     }
     setEditMode(false);
     if (message) setPendingMessage(message);
@@ -59,7 +62,12 @@ export default function App() {
         );
       case 'detail':
         return (
-          <ProjectDetail projectId={selectedProjectId} onBack={() => handleViewChange('dashboard')} />
+          <ProjectDetail
+            projectId={selectedProjectId}
+            onBack={() => handleViewChange('dashboard')}
+            activeSection={activeSection}
+            onSectionChange={setActiveSection}
+          />
         );
       default:
         return null;
@@ -86,7 +94,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="mt-2 flex-1 p-2">
+        <nav className="mt-2 flex-1 overflow-y-auto p-2">
           <p className="mb-1 px-2 text-xs uppercase tracking-wide text-white/50">Módulos</p>
           <button
             type="button"
@@ -97,6 +105,31 @@ export default function App() {
           >
             📁 <span>Proyectos</span>
           </button>
+
+          {view === 'detail' && (
+            <>
+              <hr className="my-2 border-white/10" />
+              <p className="mb-1 px-2 text-xs uppercase tracking-wide text-white/50">Proyecto</p>
+              {PROJECT_SECTIONS.map((section) => {
+                const Icon = section.icon;
+                const isActive = activeSection === section.id;
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => setActiveSection(section.id)}
+                    className={`mb-1 flex w-full items-center gap-2 rounded p-2 text-left text-sm text-white transition-colors ${
+                      isActive ? 'bg-blueprint-600' : 'hover:bg-white/10'
+                    }`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <Icon size={16} />
+                    <span>{section.label}</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
         </nav>
       </div>
 

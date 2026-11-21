@@ -36,11 +36,63 @@ pool.on('error', (err) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    databaseConfigured: Boolean(process.env.DATABASE_URL || process.env.DB_HOST)
+    databaseConfigured: Boolean(process.env.DATABASE_URL || process.env.DB_HOST),
+    aiConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
   });
+});
+
+// ============================================================================
+// ASISTENTE DE IA (Análisis de viabilidad)
+// Toda la llamada al proveedor de IA vive en esta única función. Para cambiar
+// de proveedor (ej. si se agotan los créditos de Claude) solo hay que
+// reemplazar el cuerpo de callAI por la API del otro servicio — el resto del
+// backend y el frontend no se enteran de qué proveedor hay detrás.
+// ============================================================================
+const callAI = async (prompt) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error('No hay una clave de IA configurada en el servidor (ANTHROPIC_API_KEY en .env.local).');
+  }
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1200,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody?.error?.message || `La IA respondió con error ${response.status}.`);
+  }
+  const data = await response.json();
+  return (data.content ?? []).map((block) => block.text ?? '').join('').trim();
+};
+
+app.post('/api/ai/feasibility', async (req, res) => {
+  try {
+    const { summary } = req.body ?? {};
+    if (!summary || typeof summary !== 'string' || !summary.trim()) {
+      return res.status(400).json({ error: 'Falta el resumen del proyecto a analizar.' });
+    }
+    const prompt = `Eres un consultor experto en gestión de proyectos de TI (PMI/EVM). Te paso el estado actual de un proyecto real. Analiza qué está pasando y responde en español, en formato de lista breve (máximo 6 puntos, sin relleno), con recomendaciones CONCRETAS y ACCIONABLES para que el proyecto sea viable (factible) — no repitas los números que ya te di, interprétalos. Si el proyecto ya va bien, dilo y sugiere cómo mantenerlo así.
+
+Estado actual del proyecto:
+${summary.trim()}`;
+    const text = await callAI(prompt);
+    res.json({ text });
+  } catch (error) {
+    console.error('❌ Error en análisis de IA:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ============================================================================

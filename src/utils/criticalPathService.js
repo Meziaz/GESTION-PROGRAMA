@@ -31,9 +31,58 @@ const hasReasonableLetterRatio = (value, minRatio = 0.5) => {
   return letters / clean.length >= minRatio;
 };
 
+// Tipos de dependencia soportados, en el orden en que PMI/MS Project los nombran.
+export const DEPENDENCY_TYPES = ['FS', 'SS', 'FF', 'SF'];
+export const DEPENDENCY_TYPE_LABELS = {
+  FS: 'Fin a Inicio',
+  SS: 'Inicio a Inicio',
+  FF: 'Fin a Fin',
+  SF: 'Inicio a Fin',
+};
+
+// Una predecesora se escribe "ID" (Fin a Inicio, sin retraso — el valor por defecto de
+// siempre) o "ID:TIPO±N" donde TIPO es FS/SS/FF/SF y N son días de retraso (+) o adelanto
+// (-). El ":" es obligatorio para el sufijo porque el ID ya puede traer guiones propios
+// (ej. "T-01-01") y así no hay ambigüedad entre un guion del ID y un signo de retraso.
+// Insensible a mayúsculas solo para el TIPO (FS/SS/FF/SF) — el ID se deja tal cual lo
+// tenga guardado la tarea (hay proyectos con IDs en minúscula, ej. "act-010").
+const PREDECESSOR_TOKEN_RE = /^([^:]+?)(?::(FS|SS|FF|SF)?([+-]\d+(?:\.\d+)?)?)?$/i;
+
+export const parsePredecessorToken = (rawToken) => {
+  const token = String(rawToken ?? '').trim();
+  if (!token) return null;
+  const match = token.match(PREDECESSOR_TOKEN_RE);
+  if (!match) return null;
+  const id = match[1]?.trim();
+  if (!id) return null;
+  const type = match[2] ? match[2].toUpperCase() : 'FS';
+  const lagValue = match[3] !== undefined ? Number(match[3]) : 0;
+  return { id, type, lag: Number.isFinite(lagValue) ? lagValue : 0 };
+};
+
+export const formatPredecessorToken = ({ id, type = 'FS', lag = 0 } = {}) => {
+  const lagPart = lag ? `${lag > 0 ? '+' : ''}${lag}` : '';
+  const suffix = type !== 'FS' ? `${type}${lagPart}` : lagPart;
+  return suffix ? `${id}:${suffix}` : id;
+};
+
 export const normalizePredecessors = (value) => {
   const values = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
-  return [...new Set(values.map((item) => String(item).trim()).filter(Boolean))];
+  const seen = new Set();
+  const result = [];
+  for (const raw of values) {
+    const parsed = raw && typeof raw === 'object'
+      ? {
+          id: String(raw.id ?? '').trim(),
+          type: DEPENDENCY_TYPES.includes(raw.type) ? raw.type : 'FS',
+          lag: Number.isFinite(Number(raw.lag)) ? Number(raw.lag) : 0,
+        }
+      : parsePredecessorToken(raw);
+    if (!parsed || !parsed.id || seen.has(parsed.id)) continue;
+    seen.add(parsed.id);
+    result.push(parsed);
+  }
+  return result;
 };
 
 export const getActivityName = (activity) => {
@@ -117,7 +166,8 @@ const getCycleActivities = (activities) => {
     state.set(id, 1);
     stack.push(id);
     const activity = activityMap.get(id);
-    for (const predecessorId of activity?.predecessors ?? []) {
+    for (const predecessor of activity?.predecessors ?? []) {
+      const predecessorId = predecessor.id;
       if (!activityMap.has(predecessorId) || predecessorId === id) continue;
       if (state.get(predecessorId) === 1) {
         const start = stack.indexOf(predecessorId);
@@ -205,7 +255,8 @@ export const validateActivityNetwork = (rawActivities = []) => {
       errors.push(`El avance de la tarea ${activity.id} debe estar entre 0 y 100 %.`);
     }
 
-    for (const predecessorId of activity.predecessors) {
+    for (const predecessor of activity.predecessors) {
+      const predecessorId = predecessor.id;
       if (predecessorId === activity.id) errors.push(`La tarea ${activity.id} no puede ser predecesora de sí misma.`);
       else if (!ids.has(predecessorId)) errors.push(`La tarea ${activity.id} referencia una predecesora inexistente: ${predecessorId}.`);
     }
@@ -216,7 +267,8 @@ export const validateActivityNetwork = (rawActivities = []) => {
 
   const adjacency = new Map(activities.map((activity) => [activity.id, new Set()]));
   for (const activity of activities) {
-    for (const predecessorId of activity.predecessors) {
+    for (const predecessor of activity.predecessors) {
+      const predecessorId = predecessor.id;
       if (!ids.has(predecessorId) || predecessorId === activity.id) continue;
       adjacency.get(activity.id).add(predecessorId);
       adjacency.get(predecessorId).add(activity.id);
@@ -276,11 +328,35 @@ export const addCalendarDays = (date, days) => {
   return formatDate(parsed);
 };
 
+const isWeekend = (date) => {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+};
+
+// Avanza `days` días LABORABLES (lunes a viernes) desde `date`, saltando fines de
+// semana — así las duraciones de las tareas (en días de trabajo) se convierten en
+// fechas de calendario igual que lo hace ProjectLibre/MS Project, en vez de contar
+// sábados y domingos como si fueran días productivos.
+export const addWorkingDays = (date, days) => {
+  const parsed = parseDate(date);
+  if (!parsed) return null;
+  const remaining = Math.round(Number(days) || 0);
+  if (remaining <= 0) return formatDate(parsed);
+  const current = new Date(parsed);
+  let steps = 0;
+  while (steps < remaining) {
+    current.setDate(current.getDate() + 1);
+    if (!isWeekend(current)) steps += 1;
+  }
+  return formatDate(current);
+};
+
 const topologicalOrder = (activities, validIds) => {
   const indegree = new Map(activities.map((activity) => [activity.id, 0]));
   const successors = new Map(activities.map((activity) => [activity.id, []]));
   for (const activity of activities) {
-    for (const predecessorId of activity.predecessors) {
+    for (const predecessor of activity.predecessors) {
+      const predecessorId = predecessor.id;
       if (!validIds.has(predecessorId) || predecessorId === activity.id) continue;
       indegree.set(activity.id, indegree.get(activity.id) + 1);
       successors.get(predecessorId).push(activity.id);
@@ -302,7 +378,7 @@ const topologicalOrder = (activities, validIds) => {
 
 const findCriticalPaths = (activities, earlyStart, earlyFinish, lateStart, lateFinish, projectDuration, order, successors) => {
   const criticalIds = new Set(activities.filter((activity) => lateStart[activity.id] - earlyStart[activity.id] <= EPSILON).map((activity) => activity.id));
-  const starts = activities.filter((activity) => criticalIds.has(activity.id) && activity.predecessors.every((id) => !criticalIds.has(id) || lateFinish[id] !== earlyStart[activity.id]));
+  const starts = activities.filter((activity) => criticalIds.has(activity.id) && activity.predecessors.every((predecessor) => !criticalIds.has(predecessor.id) || lateFinish[predecessor.id] !== earlyStart[activity.id]));
   const paths = [];
   const walk = (id, path) => {
     const nextPath = [...path, id];
@@ -357,27 +433,69 @@ export const computeCriticalPath = (rawActivities = [], options = {}) => {
     return result;
   }
 
+  // Traduce una relación (tipo, lag) hacia una predecesora en el earlyStart mínimo que
+  // esa relación le exige a la tarea actual. FS+0 (el único caso que existía antes) es
+  // el caso por defecto: earlyStart >= earlyFinish de la predecesora.
+  const impliedEarlyStart = (predecessor, duration) => {
+    const predStart = earlyStart[predecessor.id];
+    const predFinish = earlyFinish[predecessor.id];
+    switch (predecessor.type) {
+      case 'SS': return predStart + predecessor.lag;
+      case 'FF': return predFinish + predecessor.lag - duration;
+      case 'SF': return predStart + predecessor.lag - duration;
+      case 'FS':
+      default: return predFinish + predecessor.lag;
+    }
+  };
+
   const earlyStart = {};
   const earlyFinish = {};
   for (const id of order) {
     const activity = activities.find((item) => item.id === id);
-    const predecessorFinishes = activity.predecessors
-      .filter((predecessorId) => validIds.has(predecessorId) && earlyFinish[predecessorId] !== undefined)
-      .map((predecessorId) => earlyFinish[predecessorId]);
-    earlyStart[id] = predecessorFinishes.length > 0 ? Math.max(...predecessorFinishes) : 0;
-    earlyFinish[id] = earlyStart[id] + Number(activity.duration_days || 0);
+    const duration = Number(activity.duration_days || 0);
+    const candidates = activity.predecessors
+      .filter((predecessor) => validIds.has(predecessor.id) && earlyFinish[predecessor.id] !== undefined)
+      .map((predecessor) => impliedEarlyStart(predecessor, duration));
+    earlyStart[id] = Math.max(0, candidates.length > 0 ? Math.max(...candidates) : 0);
+    earlyFinish[id] = earlyStart[id] + duration;
   }
 
   const projectDuration = Math.max(...Object.values(earlyFinish), 0);
+
+  // successorEdges: la dual de "predecessors" — por cada tarea, qué relaciones (tipo, lag)
+  // declaran hacia ella sus sucesoras. Hace falta para el paso hacia atrás, porque ahí se
+  // recorre en sentido contrario (de sucesoras ya calculadas hacia sus predecesoras).
+  const successorEdges = new Map(activities.map((activity) => [activity.id, []]));
+  for (const activity of activities) {
+    for (const predecessor of activity.predecessors) {
+      if (!successorEdges.has(predecessor.id)) continue;
+      successorEdges.get(predecessor.id).push({ id: activity.id, type: predecessor.type, lag: predecessor.lag });
+    }
+  }
+
+  // Dual de impliedEarlyStart: el candidato de lateFinish que una relación (tipo, lag)
+  // hacia una sucesora le impone a esta tarea, visto desde las fechas tardías ya
+  // calculadas de esa sucesora.
+  const impliedLateFinish = (edge, duration) => {
+    const succLateStart = lateStart[edge.id];
+    const succLateFinish = lateFinish[edge.id];
+    switch (edge.type) {
+      case 'SS': return (succLateStart - edge.lag) + duration;
+      case 'FF': return succLateFinish - edge.lag;
+      case 'SF': return (succLateFinish - edge.lag) + duration;
+      case 'FS':
+      default: return succLateStart - edge.lag;
+    }
+  };
+
   const lateFinish = {};
   const lateStart = {};
   for (const id of [...order].reverse()) {
-    const nextSuccessors = (successors.get(id) ?? []).filter((successorId) => lateStart[successorId] !== undefined);
-    lateFinish[id] = nextSuccessors.length > 0
-      ? Math.min(...nextSuccessors.map((successorId) => lateStart[successorId]))
-      : projectDuration;
     const activity = activities.find((item) => item.id === id);
-    lateStart[id] = lateFinish[id] - Number(activity.duration_days || 0);
+    const duration = Number(activity.duration_days || 0);
+    const edges = (successorEdges.get(id) ?? []).filter((edge) => lateStart[edge.id] !== undefined && lateFinish[edge.id] !== undefined);
+    lateFinish[id] = edges.length > 0 ? Math.min(...edges.map((edge) => impliedLateFinish(edge, duration))) : projectDuration;
+    lateStart[id] = lateFinish[id] - duration;
   }
 
   const totalFloat = {};
@@ -390,8 +508,8 @@ export const computeCriticalPath = (rawActivities = [], options = {}) => {
     const duration = Number(activity.duration_days || 0);
     const taskStart = earlyStart[activity.id];
     const taskFinish = earlyFinish[activity.id];
-    const start = startDate ? addCalendarDays(options.startDate ?? options.start_date, taskStart) : null;
-    const end = startDate ? addCalendarDays(options.startDate ?? options.start_date, Math.max(taskStart, Math.ceil(taskFinish) - 1)) : null;
+    const start = startDate ? addWorkingDays(options.startDate ?? options.start_date, taskStart) : null;
+    const end = startDate ? addWorkingDays(options.startDate ?? options.start_date, Math.max(taskStart, Math.ceil(taskFinish) - 1)) : null;
     return {
       ...activity,
       early_start: round(taskStart),
@@ -428,7 +546,7 @@ export const validateProjectSchedule = (project = {}, activities = []) => {
   const result = computeCriticalPath(activities, { startDate: project.start_date });
   if (result.projectDuration > 0 && project.end_date) {
     const plannedEnd = parseDate(project.end_date);
-    const calculatedEnd = parseDate(addCalendarDays(project.start_date, Math.max(0, Math.ceil(result.projectDuration) - 1)));
+    const calculatedEnd = parseDate(addWorkingDays(project.start_date, Math.max(0, Math.ceil(result.projectDuration) - 1)));
     if (plannedEnd && calculatedEnd && plannedEnd < calculatedEnd) {
       result.warnings.push(`La fecha de fin del proyecto (${project.end_date}) es anterior al cronograma calculado (${formatDate(calculatedEnd)}).`);
     }

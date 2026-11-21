@@ -14,6 +14,10 @@ const hasPertEstimates = (activity) => [
 
 const activityLabel = (activity) => activity.activity_name || activity.name || activity.id;
 
+// Un token de predecesora puede traer sufijo ":TIPO±N" (ej. "T-01-01:SS+2"); para comparar
+// contra un ID de tarea hay que quedarse solo con la parte antes de los dos puntos.
+const predecessorTokenId = (token) => String(token ?? '').split(':')[0].trim();
+
 export default function TaskPlanningEditor({
   phases = [],
   teamMembers = [],
@@ -34,7 +38,7 @@ export default function TaskPlanningEditor({
   // para avisar antes de borrarla que esas referencias van a quedar rotas.
   const findDependents = (activityId) => phases
     .flatMap((phase) => phase.activities ?? [])
-    .filter((activity) => Array.isArray(activity.predecessors) && activity.predecessors.includes(activityId))
+    .filter((activity) => Array.isArray(activity.predecessors) && activity.predecessors.some((token) => predecessorTokenId(token) === activityId))
     .map((activity) => activityLabel(activity));
 
   // Igual que findDependents, pero para todas las tareas de una fase completa:
@@ -43,7 +47,7 @@ export default function TaskPlanningEditor({
     const idsInPhase = new Set((phases[phaseIndex]?.activities ?? []).map((activity) => activity.id));
     return phases
       .flatMap((phase, index) => (index === phaseIndex ? [] : phase.activities ?? []))
-      .filter((activity) => Array.isArray(activity.predecessors) && activity.predecessors.some((id) => idsInPhase.has(id)))
+      .filter((activity) => Array.isArray(activity.predecessors) && activity.predecessors.some((token) => idsInPhase.has(predecessorTokenId(token))))
       .map((activity) => activityLabel(activity));
   };
 
@@ -287,9 +291,12 @@ export default function TaskPlanningEditor({
                                 value={Array.isArray(rawActivity.predecessors) ? rawActivity.predecessors.join(', ') : rawActivity.predecessors ?? ''}
                                 onChange={(event) => onUpdateActivity(phaseIndex, activityIndex, 'predecessors', filterPredecessorsInput(event.target.value).split(',').map((item) => item.trim()).filter(Boolean))}
                                 className={inputClass}
-                                placeholder="Ej: T-01-01, T-01-02"
+                                placeholder="Ej: T-01-01, T-01-02:SS, T-01-03:FF+2"
                               />
-                              <p className="mt-1 text-xs text-gray-500">Escribe los ID separados por coma. Una tarea no puede depender de sí misma.</p>
+                              <p className="mt-1 text-xs text-gray-500">
+                                Escribe los ID separados por coma. Por defecto la relación es Fin-a-Inicio (la tarea empieza cuando termina la predecesora).
+                                Para otro tipo, agrega ":TIPO" (SS = Inicio-a-Inicio, FF = Fin-a-Fin, SF = Inicio-a-Fin) y, si hay retraso o adelanto, un número con signo al final (ej. ":SS+2" = 2 días después, ":FF-1" = 1 día antes). Una tarea no puede depender de sí misma.
+                              </p>
                               {Array.isArray(rawActivity.predecessors) && rawActivity.predecessors.length > 0 && (
                                 <div className="mt-2 flex flex-wrap gap-1.5">
                                   {rawActivity.predecessors.map((predecessorId, predecessorIndex) => (

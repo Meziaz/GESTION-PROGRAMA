@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, AlertTriangle, TrendingUp, Eye, Edit2, Trash2 } from 'lucide-react';
+import { Plus, AlertTriangle, TrendingUp, Eye, Edit2, Trash2, BarChart3 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { getAllProjects, deleteProject } from '../utils/storageManager';
-import { getProjectStatus, getStatusBadgeColor, getStatusLabel } from '../utils/evmCalculations';
+import { getProjectStatus, getStatusBadgeColor, getStatusLabel, calculateProjectMetrics, formatCurrency, formatIndex } from '../utils/evmCalculations';
 import { ConfirmModal } from '../utils/ConfirmModal';
 import { AlertModal } from '../utils/AlertModal';
 
@@ -93,6 +94,17 @@ export default function Dashboard({ onNewProject, onViewDetail, onEditProject, p
 
   const summary = calculateSummary();
 
+  const portfolioRows = projects.map((project) => {
+    const latest = getLatestMetrics(project);
+    if (!latest) return { id: project.id, name: project.name, hasData: false };
+    const metrics = calculateProjectMetrics(project.bac, latest);
+    const status = getProjectStatus(metrics.cpi, metrics.spi);
+    return { id: project.id, name: project.name, hasData: true, status, ...metrics };
+  });
+  const portfolioChartData = portfolioRows
+    .filter((row) => row.hasData && row.cpi !== null && row.spi !== null)
+    .map((row) => ({ name: row.name.length > 18 ? `${row.name.slice(0, 18)}…` : row.name, CPI: row.cpi, SPI: row.spi }));
+
   return (
     <div className="p-6">
       <AlertModal type={alert?.type} message={alert?.message} onClose={() => setAlert(null)} />
@@ -149,6 +161,70 @@ export default function Dashboard({ onNewProject, onViewDetail, onEditProject, p
           </div>
         </div>
       </div>
+
+      {/* Portfolio Comparison */}
+      {projects.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border-0 p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1"><BarChart3 size={20} /> Comparación de Portafolio</h2>
+          <p className="text-sm text-gray-600 mb-4">CPI y SPI de todos los proyectos lado a lado. La línea punteada marca la meta (1.0): por debajo, el proyecto va mal en costo o cronograma.</p>
+
+          {portfolioChartData.length === 0 ? (
+            <p className="text-sm text-gray-400 italic">Ningún proyecto tiene todavía una fecha de corte registrada.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(220, portfolioChartData.length * 50)}>
+              <BarChart data={portfolioChartData} layout="vertical" margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis type="number" domain={[0, 'dataMax + 0.2']} tick={{ fontSize: 11 }} />
+                <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value) => formatIndex(value)} />
+                <Legend />
+                <ReferenceLine x={1} stroke="#9ca3af" strokeDasharray="4 4" label={{ value: 'Meta 1.0', position: 'top', fontSize: 11, fill: '#6b7280' }} />
+                <Bar dataKey="CPI" fill="#4d84e0" radius={[0, 3, 3, 0]} />
+                <Bar dataKey="SPI" fill="#16a34a" radius={[0, 3, 3, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+
+          <div className="mt-6 overflow-x-auto">
+            <table className="w-full text-sm min-w-[720px]">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-xs text-gray-600">
+                  <th className="py-2 pr-2">Proyecto</th>
+                  <th className="py-2 pr-2 text-right">BAC</th>
+                  <th className="py-2 pr-2 text-right">EV</th>
+                  <th className="py-2 pr-2 text-right">AC</th>
+                  <th className="py-2 pr-2 text-right">CPI</th>
+                  <th className="py-2 pr-2 text-right">SPI</th>
+                  <th className="py-2 pr-2 text-right">VAC</th>
+                  <th className="py-2 pr-2 text-center">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolioRows.map((row) => (
+                  <tr key={row.id} className="border-b border-gray-100">
+                    <td className="py-1.5 pr-2 font-medium text-gray-900">{row.name}</td>
+                    {row.hasData ? (
+                      <>
+                        <td className="py-1.5 pr-2 text-right font-mono">{formatCurrency(row.bac)}</td>
+                        <td className="py-1.5 pr-2 text-right font-mono">{formatCurrency(row.ev)}</td>
+                        <td className="py-1.5 pr-2 text-right font-mono">{formatCurrency(row.ac)}</td>
+                        <td className={`py-1.5 pr-2 text-right font-mono font-semibold ${row.cpi !== null && row.cpi < 1 ? 'text-red-600' : 'text-green-600'}`}>{formatIndex(row.cpi)}</td>
+                        <td className={`py-1.5 pr-2 text-right font-mono font-semibold ${row.spi !== null && row.spi < 1 ? 'text-red-600' : 'text-green-600'}`}>{formatIndex(row.spi)}</td>
+                        <td className={`py-1.5 pr-2 text-right font-mono ${row.vac !== null && row.vac < 0 ? 'text-red-600' : 'text-green-600'}`}>{row.vac === null ? 'N/A' : formatCurrency(row.vac)}</td>
+                        <td className="py-1.5 pr-2 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadgeColor(row.status)}`}>{getStatusLabel(row.status)}</span>
+                        </td>
+                      </>
+                    ) : (
+                      <td className="py-1.5 pr-2 text-gray-400 italic" colSpan={7}>Sin fecha de corte registrada</td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (

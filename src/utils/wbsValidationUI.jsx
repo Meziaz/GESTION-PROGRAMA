@@ -1,9 +1,9 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle, Download, ListChecks } from 'lucide-react';
-import { normalizeActivity, validateProjectSchedule, addCalendarDays } from './criticalPathService';
+import { normalizeActivity, validateProjectSchedule, formatPredecessorToken } from './criticalPathService';
 import { validateAllActivities } from './dependencyValidator';
 
-const collectActivities = (project) => {
+export const collectActivities = (project) => {
   const activities = [];
   for (const phase of project?.wbs_phases ?? []) {
     if (!phase || typeof phase !== 'object') continue;
@@ -18,6 +18,37 @@ const collectActivities = (project) => {
     }
   }
   return activities;
+};
+
+const parseISODate = (value) => {
+  const str = String(value ?? '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(str) ? new Date(`${str}T00:00:00`) : null;
+};
+
+const diffCalendarDays = (fromValue, toValue) => {
+  const from = parseISODate(fromValue);
+  const to = parseISODate(toValue);
+  if (!from || !to) return 0;
+  return Math.round((to.getTime() - from.getTime()) / 86400000);
+};
+
+const WEEKDAY_LETTERS_ES = ['D', 'L', 'M', 'M', 'J', 'V', 'S']; // getDay(): 0=domingo..6=sábado
+const MONTHS_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// Una columna por día calendario (no por día de duración) para que el eje se vea como en
+// ProjectLibre/MS Project: una fila de letras L-M-M-J-V-S-D y, sobre los lunes, la fecha.
+const buildDayColumns = (startValue, totalDays) => {
+  const start = parseISODate(startValue);
+  if (!start) return [];
+  return Array.from({ length: totalDays }, (_, i) => {
+    const date = new Date(start);
+    date.setDate(date.getDate() + i);
+    const dow = date.getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    const isWeekStart = i === 0 || dow === 1;
+    const label = isWeekStart ? `${date.getDate()} ${MONTHS_ES[date.getMonth()]} ${String(date.getFullYear()).slice(-2)}` : '';
+    return { i, pct: (i / totalDays) * 100, widthPct: (1 / totalDays) * 100, letter: WEEKDAY_LETTERS_ES[dow], isWeekend, isWeekStart, label };
+  });
 };
 
 const formatNumber = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(2).replace(/\.00$/, '') : '—';
@@ -148,11 +179,13 @@ export function CronogramaPanel({ project }) {
   const activities = collectActivities(project);
   if (activities.length === 0) return null;
   const result = getScheduleResult(project, activities);
-  if (!result.isValid || result.projectDuration <= 0) {
+  const hasValidStartDate = Boolean(parseISODate(project?.start_date));
+  if (!result.isValid || result.projectDuration <= 0 || !hasValidStartDate) {
+    const errors = hasValidStartDate ? result.errors : [...result.errors, 'El proyecto no tiene una fecha de inicio válida (AAAA-MM-DD); corrígela en "Editar Proyecto" para poder dibujar el cronograma.'];
     return (
       <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded" role="alert">
         <p className="font-semibold text-red-900">Cronograma no disponible</p>
-        <ValidationMessages errors={result.errors} warnings={result.warnings} />
+        <ValidationMessages errors={errors} warnings={result.warnings} />
       </div>
     );
   }
@@ -161,40 +194,56 @@ export function CronogramaPanel({ project }) {
 
   const ROW_HEIGHT = 52;
   const rowIndexById = new Map(scheduleRows.map((task, index) => [task.id, index]));
+
+  // Eje por día calendario (como ProjectLibre: lunes a domingo, con fines de semana
+  // sombreados), no por "día de duración" — así las barras se ubican en su fecha real.
+  const lastFinish = scheduleRows.reduce((max, task) => (task.finish_date && (!max || task.finish_date > max) ? task.finish_date : max), null) ?? project.end_date;
+  const totalDays = Math.max(1, diffCalendarDays(project.start_date, lastFinish) + 1);
+  const dayColumns = buildDayColumns(project.start_date, totalDays);
+
   const bars = scheduleRows.map((task) => {
-    const left = (task.early_start / result.projectDuration) * 100;
-    const width = Math.min(100 - left, Math.max(1.5, (task.duration_days / result.projectDuration) * 100));
+    const dayOffset = diffCalendarDays(project.start_date, task.start_date);
+    const spanDays = Math.max(1, diffCalendarDays(task.start_date, task.finish_date) + 1);
+    const left = (dayOffset / totalDays) * 100;
+    const width = Math.min(100 - left, Math.max(1, (spanDays / totalDays) * 100));
     return { ...task, left, width };
   });
   const barById = new Map(bars.map((bar) => [bar.id, bar]));
 
   const arrows = [];
   bars.forEach((bar, rowIndex) => {
-    (bar.predecessors ?? []).forEach((predId) => {
-      const predBar = barById.get(predId);
-      const predRow = rowIndexById.get(predId);
+    (bar.predecessors ?? []).forEach((predecessor) => {
+      const predBar = barById.get(predecessor.id);
+      const predRow = rowIndexById.get(predecessor.id);
       if (!predBar || predRow === undefined) return;
       const x1 = predBar.left + predBar.width;
       const y1 = predRow + 0.5;
       const x2 = bar.left;
       const y2 = rowIndex + 0.5;
       const midX = (x1 + x2) / 2;
-      arrows.push({ key: `${predId}->${bar.id}`, d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`, critical: bar.is_critical && predBar.is_critical });
+      // Para FS+0 (el caso de siempre) no hace falta etiqueta; para SS/FF/SF o con
+      // retraso/adelanto, se marca el tipo en el punto donde la flecha dobla.
+      const label = predecessor.type !== 'FS' || predecessor.lag ? formatPredecessorToken({ id: '', type: predecessor.type, lag: predecessor.lag }).replace(/^:/, '') : '';
+      arrows.push({
+        key: `${predecessor.id}->${bar.id}`,
+        d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`,
+        critical: bar.is_critical && predBar.is_critical,
+        label,
+        labelXPct: midX,
+        labelYPx: ((y1 + y2) / 2) * ROW_HEIGHT,
+      });
     });
   });
 
-  const AXIS_TICKS = 6;
-  const axisTicks = Array.from({ length: AXIS_TICKS + 1 }, (_, i) => {
-    const dayOffset = Math.round((result.projectDuration * i) / AXIS_TICKS);
-    return { pct: (i / AXIS_TICKS) * 100, date: addCalendarDays(project.start_date, dayOffset) ?? '' };
-  });
+  const DAY_COLUMN_PX = 20;
+  const timelineMinWidth = Math.max(640, totalDays * DAY_COLUMN_PX);
 
   return (
     <div className="bg-white rounded-lg shadow-sm border-0 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2"><ListChecks size={20} /> Cronograma</h3>
-          <p className="text-sm text-gray-600 mt-1">Estilo diagrama de Gantt (como ProjectLibre/MS Project). Barras en rojo: tareas con holgura cero (ruta crítica). Las flechas muestran las dependencias.</p>
+          <p className="text-sm text-gray-600 mt-1">Estilo diagrama de Gantt (como ProjectLibre/MS Project). Barras en rojo: tareas con holgura cero (ruta crítica). Las flechas muestran las dependencias; si no son Fin-a-Inicio simple llevan una etiqueta (SS, FF, SF, o el retraso/adelanto en días).</p>
         </div>
         <button
           type="button"
@@ -206,10 +255,10 @@ export function CronogramaPanel({ project }) {
       </div>
       {result.warnings.length > 0 && <div className="mb-4 rounded bg-red-50 border border-red-300 p-3"><ValidationMessages warnings={result.warnings} /></div>}
       <div className="overflow-x-auto">
-        <div className="min-w-[900px] flex">
+        <div className="flex" style={{ minWidth: 260 + timelineMinWidth }}>
           {/* Label column */}
           <div className="w-[260px] shrink-0">
-            <div className="h-8 border-b border-gray-200" />
+            <div className="h-10 border-b border-gray-200" />
             {scheduleRows.map((task) => (
               <div key={task.id} className="flex flex-col justify-center border-b border-gray-100 pr-3" style={{ height: ROW_HEIGHT }}>
                 <p className={`text-sm font-medium truncate ${task.is_critical ? 'text-red-700' : 'text-gray-900'}`}>{task.id} · {task.activity_name}</p>
@@ -219,21 +268,32 @@ export function CronogramaPanel({ project }) {
           </div>
 
           {/* Timeline column */}
-          <div className="flex-1 min-w-0">
-            {/* Date axis header */}
-            <div className="relative h-8 border-b border-gray-200">
-              {axisTicks.map((tick) => (
-                <div key={tick.pct} className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${tick.pct}%`, transform: tick.pct === 0 ? 'none' : tick.pct === 100 ? 'translateX(-100%)' : 'translateX(-50%)' }}>
-                  <span className="text-[10px] font-mono text-gray-500 whitespace-nowrap">{tick.date}</span>
-                  <span className="w-px flex-1 bg-gray-200 mt-1" />
+          <div className="flex-1" style={{ minWidth: timelineMinWidth }}>
+            {/* Eje de fechas: fila de fecha por semana + fila de día (L M M J V S D) */}
+            <div className="relative h-10 border-b border-gray-200">
+              {dayColumns.filter((day) => day.label).map((day) => (
+                <div key={`date-${day.i}`} className="absolute top-0 h-5 flex items-center border-l border-gray-300 pl-0.5" style={{ left: `${day.pct}%` }}>
+                  <span className="text-[10px] font-mono text-gray-600 whitespace-nowrap">{day.label}</span>
+                </div>
+              ))}
+              {dayColumns.map((day) => (
+                <div
+                  key={`dow-${day.i}`}
+                  className={`absolute top-5 h-5 flex items-center justify-center text-[10px] font-semibold ${day.isWeekend ? 'bg-gray-100 text-gray-400' : 'text-gray-600'}`}
+                  style={{ left: `${day.pct}%`, width: `${day.widthPct}%` }}
+                >
+                  {day.letter}
                 </div>
               ))}
             </div>
 
             {/* Bars + dependency arrows */}
             <div className="relative" style={{ height: bars.length * ROW_HEIGHT }}>
-              {axisTicks.map((tick) => (
-                <div key={tick.pct} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${tick.pct}%` }} />
+              {dayColumns.filter((day) => day.isWeekend).map((day) => (
+                <div key={`weekend-${day.i}`} className="absolute top-0 bottom-0 bg-gray-100" style={{ left: `${day.pct}%`, width: `${day.widthPct}%` }} />
+              ))}
+              {dayColumns.filter((day) => day.isWeekStart).map((day) => (
+                <div key={`weekline-${day.i}`} className="absolute top-0 bottom-0 w-px bg-gray-300" style={{ left: `${day.pct}%` }} />
               ))}
               <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 100 ${bars.length}`} preserveAspectRatio="none">
                 <defs>
@@ -256,6 +316,18 @@ export function CronogramaPanel({ project }) {
                   />
                 ))}
               </svg>
+              {/* Etiquetas de tipo/lag en HTML aparte del SVG: el viewBox del SVG se
+                  estira de forma no uniforme (preserveAspectRatio="none") para encajar
+                  la grilla de días, lo que deja el texto ilegible si se dibuja adentro. */}
+              {arrows.filter((arrow) => arrow.label).map((arrow) => (
+                <span
+                  key={`label-${arrow.key}`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded bg-white px-1 text-[10px] font-semibold text-indigo-700 shadow-sm"
+                  style={{ left: `${arrow.labelXPct}%`, top: arrow.labelYPx }}
+                >
+                  {arrow.label}
+                </span>
+              ))}
               {bars.map((bar, rowIndex) => (
                 <div key={bar.id} className="absolute left-0 right-0 border-b border-gray-100" style={{ top: rowIndex * ROW_HEIGHT, height: ROW_HEIGHT }}>
                   <div
@@ -265,6 +337,14 @@ export function CronogramaPanel({ project }) {
                   >
                     <span className="text-[10px] text-white font-medium whitespace-nowrap overflow-hidden text-ellipsis">{bar.duration_days}d</span>
                   </div>
+                  {bar.responsable && (
+                    <span
+                      className="absolute top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-800 whitespace-nowrap"
+                      style={{ left: `calc(${bar.left + bar.width}% + 6px)` }}
+                    >
+                      {bar.responsable}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -298,7 +378,7 @@ export function DiccionarioEDTPanel({ project }) {
       });
     }
   }
-  const downloadRows = rows.map(({ wbs, phase, task, schedule }) => [wbs, task.id, phase, task.activity_name, task.deliverable, task.predecessors.join(' | '), task.optimal_time, task.estimated_time, task.pessimistic_time, schedule?.duration_days ?? task.duration_days, schedule?.start_date ?? '', schedule?.finish_date ?? '', schedule?.total_float ?? '', schedule?.is_critical ? 'Sí' : 'No', task.responsable ?? task.assigned_role ?? '']);
+  const downloadRows = rows.map(({ wbs, phase, task, schedule }) => [wbs, task.id, phase, task.activity_name, task.deliverable, task.predecessors.map(formatPredecessorToken).join(' | '), task.optimal_time, task.estimated_time, task.pessimistic_time, schedule?.duration_days ?? task.duration_days, schedule?.start_date ?? '', schedule?.finish_date ?? '', schedule?.total_float ?? '', schedule?.is_critical ? 'Sí' : 'No', task.responsable ?? task.assigned_role ?? '']);
   return (
     <div className="bg-white rounded-lg shadow-sm border-0 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -342,7 +422,7 @@ export function DiccionarioEDTPanel({ project }) {
                 <td className="px-2 py-2 font-medium text-gray-900">{task.id}</td>
                 <td className="px-2 py-2 text-gray-900">{task.activity_name}</td>
                 <td className="px-2 py-2 text-gray-700">{task.deliverable || 'Sin definir'}</td>
-                <td className="px-2 py-2 text-gray-700">{task.predecessors.length > 0 ? task.predecessors.join(', ') : 'Inicio'}</td>
+                <td className="px-2 py-2 text-gray-700">{task.predecessors.length > 0 ? task.predecessors.map(formatPredecessorToken).join(', ') : 'Inicio'}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.optimal_time)}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.estimated_time)}</td>
                 <td className="px-2 py-2 text-right tabular-nums">{formatFixed2(task.pessimistic_time)}</td>

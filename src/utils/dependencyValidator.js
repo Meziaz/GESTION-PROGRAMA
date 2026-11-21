@@ -22,8 +22,8 @@ const hasCycle = (activities) => {
     if (visited.has(id)) return;
     visiting.add(id);
     const activity = activityMap.get(id);
-    for (const predecessorId of activity?.predecessors ?? []) {
-      if (activityMap.has(predecessorId)) visit(predecessorId, [...path, id]);
+    for (const predecessor of activity?.predecessors ?? []) {
+      if (activityMap.has(predecessor.id)) visit(predecessor.id, [...path, id]);
     }
     visiting.delete(id);
     visited.add(id);
@@ -43,12 +43,12 @@ export const validatePredecessorReferences = (activities = []) => {
   const validIds = new Set(normalized.map((activity) => activity.id));
   const invalidReferences = [];
   for (const activity of normalized) {
-    for (const predecessorId of activity.predecessors) {
-      if (!validIds.has(predecessorId)) {
+    for (const predecessor of activity.predecessors) {
+      if (!validIds.has(predecessor.id)) {
         invalidReferences.push({
           activityId: activity.id,
           activityName: activityName(activity),
-          invalidPredecessorId: predecessorId,
+          invalidPredecessorId: predecessor.id,
         });
       }
     }
@@ -58,7 +58,7 @@ export const validatePredecessorReferences = (activities = []) => {
 
 export const checkOrphanedSuccessors = (activities = []) => {
   const normalized = (Array.isArray(activities) ? activities : []).map(normalizeActivity);
-  const referenced = new Set(normalized.flatMap((activity) => activity.predecessors));
+  const referenced = new Set(normalized.flatMap((activity) => activity.predecessors.map((predecessor) => predecessor.id)));
   const orphaned = normalized
     .filter((activity) => activity.predecessors.length === 0 && !referenced.has(activity.id) && normalized.length > 1)
     .map((activity) => ({ id: activity.id, name: activityName(activity) }));

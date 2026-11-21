@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Plus, Loader, ChevronDown, ChevronUp, LayoutDashboard, CalendarDays, BarChart3, Network, ClipboardList, Users2, FileText, Layers } from 'lucide-react';
+import { ArrowLeft, Plus, Loader, ChevronDown, ChevronUp, CalendarDays, Network, ClipboardList, Users2, FileText, Layers, Wallet } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -19,6 +19,7 @@ import {
   getProjectStatus,
   getStatusBadgeColor,
   getStatusLabel,
+  linearRegression,
 } from '../utils/evmCalculations';
 import { getProject, addCutDate, saveProject } from '../utils/storageManager';
 import { filterDecimal } from '../utils/inputFilters';
@@ -28,6 +29,15 @@ import { DiagnosticoPanel } from '../utils/diagnosticoPanel';
 import { RaciPanel } from '../utils/raciPanel';
 import { ActaPanel } from '../utils/actaPanel';
 import { BlueprintPanel } from '../utils/blueprintPanel';
+import { ResourcesPanel } from '../utils/resourcesPanel';
+import { QualityPanel } from '../utils/qualityPanel';
+import { RisksPanel } from '../utils/risksPanel';
+import { ControlDashboardPanel } from '../utils/controlDashboardPanel';
+import { EconomicsPanel } from '../utils/economicsPanel';
+import { ChangeControlPanel } from '../utils/changeControlPanel';
+import { AiAdvisorPanel } from '../utils/aiAdvisorPanel';
+import { WbsEvmPanel } from '../utils/wbsEvmPanel';
+import { ResourceLevelingPanel } from '../utils/resourceLevelingPanel';
 import { AlertModal } from '../utils/AlertModal';
 
 const parseLocalDate = (value) => {
@@ -44,7 +54,31 @@ const localDateString = () => {
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 };
 
-export default function ProjectDetail({ projectId, onBack }) {
+// Barra de sub-pestañas usada dentro de los módulos que agrupan varios paneles
+// (Acta y Alcance, EDT y Cronograma, Equipo y Recursos).
+const SubTabBar = ({ tabs, active, onChange }) => (
+  <div className="mb-4 flex flex-wrap gap-2 border-b border-gray-200 pb-3 print:hidden">
+    {tabs.map((tab) => {
+      const Icon = tab.icon;
+      const isActive = active === tab.id;
+      return (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+          className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+            isActive ? 'bg-blueprint-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-blueprint-50 hover:text-blueprint-700'
+          }`}
+        >
+          <Icon size={15} />
+          {tab.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+export default function ProjectDetail({ projectId, onBack, activeSection, onSectionChange }) {
   const [project, setProject] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [chartData, setChartData] = useState([]);
@@ -56,13 +90,16 @@ export default function ProjectDetail({ projectId, onBack }) {
     cut_date: localDateString(),
     actual_percentage: 0,
     actual_cost: 0,
+    committed_cost: 0,
+    paid_cost: 0,
   });
   const [cutDateError, setCutDateError] = useState(''); // Nueva
-  const [activeSection, setActiveSection] = useState('overview');
+  const [charterTab, setCharterTab] = useState('diagnostico');
+  const [scheduleTab, setScheduleTab] = useState('wbs');
+  const [teamTab, setTeamTab] = useState('raci');
   const cutDateFormRef = useRef(null);
 
   useEffect(() => {
-    setActiveSection('overview');
     loadProjectData();
   }, [projectId]);
 
@@ -226,6 +263,12 @@ export default function ProjectDetail({ projectId, onBack }) {
       setCutDateError('El costo real debe ser un número no negativo.');
       return;
     }
+    const committedCost = Number(newCutDate.committed_cost) || 0;
+    const paidCost = Number(newCutDate.paid_cost) || 0;
+    if (committedCost < 0 || paidCost < 0) {
+      setCutDateError('El compromiso pendiente y lo pagado deben ser números no negativos.');
+      return;
+    }
     if (project.cut_dates?.some((cd) => cd.cut_date === newCutDate.cut_date)) {
       setCutDateError(`Ya existe una fecha de corte en ${newCutDate.cut_date}.`);
       return;
@@ -240,6 +283,8 @@ export default function ProjectDetail({ projectId, onBack }) {
       ...newCutDate,
       actual_percentage: actualPercentage,
       actual_cost: actualCost,
+      committed_cost: committedCost,
+      paid_cost: paidCost,
       pv_value: pvValue,
       ev_value: evValue,
       cpi: actualCost > 0 ? evValue / actualCost : null,
@@ -254,6 +299,8 @@ export default function ProjectDetail({ projectId, onBack }) {
         cut_date: localDateString(),
         actual_percentage: 0,
         actual_cost: 0,
+        committed_cost: 0,
+        paid_cost: 0,
       });
       setShowCutDateForm(false);
       await loadProjectData();
@@ -321,33 +368,28 @@ export default function ProjectDetail({ projectId, onBack }) {
   const cutDateOffset = projectStartDate && selectedCutDate
     ? Math.floor((selectedCutDate - projectStartDate) / (1000 * 60 * 60 * 24))
     : null;
+
+  // Pronóstico de AC por regresión lineal (hoja "Graficos y Prediccion" del Simulador de
+  // clase): alternativa a los EAC puntuales, usa la tendencia de TODOS los cortes.
+  const projectEndDateForForecast = parseLocalDate(project.end_date);
+  const projectTotalDaysForForecast = projectStartDate && projectEndDateForForecast
+    ? Math.max(1, Math.floor((projectEndDateForForecast - projectStartDate) / (1000 * 60 * 60 * 24)))
+    : null;
+  const costRegressionPoints = (project.cut_dates ?? [])
+    .map((cd) => {
+      const d = parseLocalDate(cd.cut_date);
+      if (!projectStartDate || !d) return null;
+      return { x: Math.floor((d - projectStartDate) / (1000 * 60 * 60 * 24)), y: Number(cd.actual_cost) || 0 };
+    })
+    .filter(Boolean);
+  const costRegression = costRegressionPoints.length >= 3 ? linearRegression(costRegressionPoints) : null;
+  const forecastAC = costRegression && projectTotalDaysForForecast !== null
+    ? Math.max(0, costRegression.predict(projectTotalDaysForForecast))
+    : null;
   const totalActivities = (project.wbs_phases ?? []).reduce(
     (total, phase) => total + (Array.isArray(phase?.activities) ? phase.activities.length : 0),
     0,
   );
-  const sectionGroups = [
-    {
-      label: 'Planificación',
-      items: [
-        // Ocultas temporalmente para la defensa (no se borró el código, solo no se muestran):
-        // { id: 'diagnostico', label: 'Diagnóstico', icon: ClipboardList },
-        // { id: 'blueprint', label: 'Blueprint', icon: Layers },
-        { id: 'wbs', label: 'WBS', icon: Network },
-        { id: 'raci', label: 'RACI', icon: Users2 },
-      ],
-    },
-    {
-      label: 'Ejecución y Cierre',
-      items: [
-        { id: 'schedule', label: 'Cronograma', icon: CalendarDays },
-        { id: 'overview', label: 'Resumen', icon: LayoutDashboard },
-        // Ocultas temporalmente para la defensa (no se borró el código, solo no se muestran):
-        // { id: 'tracking', label: 'Seguimiento', icon: BarChart3 },
-        // { id: 'acta', label: 'Acta de Constitución', icon: FileText },
-      ],
-    },
-  ];
-
   const handleSaveDiagnostico = async (updatedProject) => {
     const saved = await saveProject(updatedProject);
     setProject(saved);
@@ -361,6 +403,38 @@ export default function ProjectDetail({ projectId, onBack }) {
   const handleSaveRaci = async (updatedProject) => {
     const saved = await saveProject(updatedProject);
     setProject(saved);
+  };
+
+  const handleSaveResources = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+    return saved;
+  };
+
+  const handleSaveEconomics = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveChanges = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveQuality = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveRisks = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+  };
+
+  const handleSaveControlDashboard = async (updatedProject) => {
+    const saved = await saveProject(updatedProject);
+    setProject(saved);
+    return saved;
   };
 
   return (
@@ -409,68 +483,55 @@ export default function ProjectDetail({ projectId, onBack }) {
         */}
       </div>
 
-      <nav className="space-y-3 rounded-lg border border-gray-200 bg-white p-3  print:hidden" aria-label="Secciones del proyecto">
-        {sectionGroups.map((group, groupIndex) => (
-          <div key={group.label}>
-            <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-ink-soft">{group.label}</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {group.items.map((section) => {
-                const Icon = section.icon;
-                const isActive = activeSection === section.id;
-                return (
-                  <button
-                    key={section.id}
-                    type="button"
-                    onClick={() => setActiveSection(section.id)}
-                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${
-                      isActive ? 'bg-blueprint-600 text-white ' : 'text-gray-600 hover:bg-blueprint-50 hover:text-blueprint-700'
-                    }`}
-                    aria-current={isActive ? 'page' : undefined}
-                  >
-                    <Icon size={17} />
-                    {section.label}
-                  </button>
-                );
-              })}
-            </div>
-            {groupIndex < sectionGroups.length - 1 && <hr className="mt-3 border-gray-200" />}
-          </div>
-        ))}
-      </nav>
+      <div className="space-y-6">
 
-      {activeSection === 'diagnostico' && (
-        <DiagnosticoPanel project={project} onSave={handleSaveDiagnostico} />
-      )}
-
-      {activeSection === 'blueprint' && (
-        <BlueprintPanel project={project} onSave={handleSaveBlueprint} />
-      )}
-
-      {activeSection === 'overview' && (
+      {activeSection === 'home' && (
         <div className="space-y-6">
-          {/* Project Header Info */}
+          <ControlDashboardPanel project={project} onSave={handleSaveControlDashboard} />
+          <AiAdvisorPanel project={project} metrics={metrics} />
           <ProjectHeaderInfo project={project} />
+          <ProjectMetadata project={project} />
+          <TeamMembersInfo project={project} />
+        </div>
+      )}
 
-      {/* Project Metadata */}
-      <ProjectMetadata project={project} />
-
-      {/* WBS Validation */}
-      <WBSValidationPanel project={project} />
-      <CriticalPathPanel project={project} />
-
-      {/* Team */}
-      <TeamMembersInfo project={project} />
+      {activeSection === 'charter' && (
+        <div className="space-y-6">
+          <SubTabBar
+            tabs={[
+              { id: 'diagnostico', label: 'Diagnóstico', icon: ClipboardList },
+              { id: 'blueprint', label: 'Blueprint', icon: Layers },
+              { id: 'acta', label: 'Acta formal', icon: FileText },
+            ]}
+            active={charterTab}
+            onChange={setCharterTab}
+          />
+          {charterTab === 'diagnostico' && <DiagnosticoPanel project={project} onSave={handleSaveDiagnostico} />}
+          {charterTab === 'blueprint' && <BlueprintPanel project={project} onSave={handleSaveBlueprint} />}
+          {charterTab === 'acta' && <ActaPanel project={project} />}
         </div>
       )}
 
       {activeSection === 'schedule' && (
         <div className="space-y-6">
-          <CronogramaPanel project={project} />
-          <DiccionarioEDTPanel project={project} />
+          <SubTabBar
+            tabs={[
+              { id: 'wbs', label: 'Estructura (EDT)', icon: Network },
+              { id: 'gantt', label: 'Cronograma', icon: CalendarDays },
+            ]}
+            active={scheduleTab}
+            onChange={setScheduleTab}
+          />
+          {scheduleTab === 'gantt' && (
+            <>
+              <CronogramaPanel project={project} />
+              <DiccionarioEDTPanel project={project} />
+            </>
+          )}
         </div>
       )}
 
-      {activeSection === 'tracking' && (
+      {activeSection === 'evm' && (
         <div className="space-y-6">
           {!showCutDateForm && (!project.cut_dates || project.cut_dates.length === 0) && (
             <div className="rounded-lg border border-dashed border-paper-line bg-white p-8 text-center">
@@ -530,12 +591,36 @@ export default function ProjectDetail({ projectId, onBack }) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Costo Real (USD)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">AC devengado (USD) — usado en el EVM</label>
               <input
                 type="text"
                 inputMode="decimal"
                 value={newCutDate.actual_cost}
                 onChange={(e) => setNewCutDate({ ...newCutDate, actual_cost: filterDecimal(e.target.value) })}
+                className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Compromiso pendiente (USD)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={newCutDate.committed_cost}
+                onChange={(e) => setNewCutDate({ ...newCutDate, committed_cost: filterDecimal(e.target.value) })}
+                placeholder="Órdenes de compra emitidas, aún no pagadas"
+                className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Pagado (USD)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={newCutDate.paid_cost}
+                onChange={(e) => setNewCutDate({ ...newCutDate, paid_cost: filterDecimal(e.target.value) })}
+                placeholder="Desembolsos reales ya efectuados"
                 className="w-full px-4 py-2 bg-white border border-paper-line rounded-lg focus:ring-2 focus:ring-blueprint-600 focus:border-transparent outline-none"
               />
             </div>
@@ -616,8 +701,20 @@ export default function ProjectDetail({ projectId, onBack }) {
                 </div>
 
                 <div>
-                  <p className="text-sm text-gray-600">AC (Costo Real)</p>
+                  <p className="text-sm text-gray-600">AC (Costo Real / devengado)</p>
                   <p className="text-2xl font-bold text-red-600">{formatCurrency(metrics.ac)}</p>
+                </div>
+
+                <hr className="my-1 border-gray-100" />
+
+                <div>
+                  <p className="text-xs text-gray-500">Compromiso pendiente</p>
+                  <p className="text-base font-semibold text-gray-700">{formatCurrency(latestCutDate?.committed_cost ?? 0)}</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-gray-500">Pagado</p>
+                  <p className="text-base font-semibold text-gray-700">{formatCurrency(latestCutDate?.paid_cost ?? 0)}</p>
                 </div>
               </div>
             </div>
@@ -691,6 +788,12 @@ export default function ProjectDetail({ projectId, onBack }) {
                   <p className="text-xl font-bold text-orange-600">{formatCurrency(metrics.eac_pessimistic)}</p>
                 </div>
 
+                <div>
+                  <p className="text-sm text-gray-600">EAC (Excepcional) - AC + (BAC − EV)</p>
+                  <p className="text-xl font-bold text-purple-600">{formatCurrency(metrics.eac_atypical)}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Asume que la variación actual fue puntual y el resto se hará según lo planeado.</p>
+                </div>
+
                 <hr className="my-3 border-gray-200" />
 
                 <div>
@@ -721,6 +824,22 @@ export default function ProjectDetail({ projectId, onBack }) {
                   <p className={`text-lg font-bold ${metrics.tcpi_eac && metrics.tcpi_eac >= 1 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatIndex(metrics.tcpi_eac)}
                   </p>
+                </div>
+
+                <hr className="my-3 border-gray-200" />
+
+                <div>
+                  <p className="text-sm text-gray-600">Pronóstico AC (regresión lineal)</p>
+                  {costRegression ? (
+                    <>
+                      <p className="text-xl font-bold text-indigo-600">{formatCurrency(forecastAC)}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Proyectado al fin del proyecto · R² = {costRegression.rSquared.toFixed(2)} · {costRegression.pointCount} cortes
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-400 italic">Necesitas al menos 3 fechas de corte para este pronóstico (tienes {project.cut_dates?.length ?? 0}).</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -846,11 +965,16 @@ export default function ProjectDetail({ projectId, onBack }) {
           </div>
         </>
       )}
+
+          <WbsEvmPanel project={project} topDownEv={project?.cut_dates?.length > 0 ? metrics?.ev : null} />
         </div>
       )}
 
-      {activeSection === 'wbs' && (
+      {activeSection === 'schedule' && scheduleTab === 'wbs' && (
         <div className="space-y-6">
+          <WBSValidationPanel project={project} />
+          <CriticalPathPanel project={project} />
+          <ResourceLevelingPanel project={project} />
           {/* WBS */}
       {project.wbs_phases && project.wbs_phases.length > 0 && (
         <div className="bg-white rounded-lg shadow-sm border-0 p-6">
@@ -938,13 +1062,37 @@ export default function ProjectDetail({ projectId, onBack }) {
         </div>
       )}
 
-      {activeSection === 'raci' && (
-        <RaciPanel project={project} onSave={handleSaveRaci} />
+      {activeSection === 'team' && (
+        <div className="space-y-6">
+          <SubTabBar
+            tabs={[
+              { id: 'raci', label: 'Asignación (RACI)', icon: Users2 },
+              { id: 'resources', label: 'Costeo (Recursos)', icon: Wallet },
+            ]}
+            active={teamTab}
+            onChange={setTeamTab}
+          />
+          {teamTab === 'raci' && <RaciPanel project={project} onSave={handleSaveRaci} />}
+          {teamTab === 'resources' && <ResourcesPanel project={project} onSave={handleSaveResources} />}
+        </div>
       )}
 
-      {activeSection === 'acta' && (
-        <ActaPanel project={project} />
+      {activeSection === 'quality' && (
+        <QualityPanel project={project} onSave={handleSaveQuality} />
       )}
+
+      {activeSection === 'economics' && (
+        <EconomicsPanel project={project} onSave={handleSaveEconomics} />
+      )}
+
+      {activeSection === 'risks' && (
+        <RisksPanel project={project} onSave={handleSaveRisks} />
+      )}
+
+      {activeSection === 'changes' && (
+        <ChangeControlPanel project={project} onSave={handleSaveChanges} />
+      )}
+      </div>
     </div>
   );
 }

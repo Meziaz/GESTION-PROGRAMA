@@ -102,6 +102,9 @@ export const calculateProjectMetrics = (bac, latestMetrics) => {
     vac: null,
     tcpi_bac: null,
     tcpi_eac: null,
+    eac_atypical: null,
+    wr: Math.round(budget * 100) / 100,
+    fr: Math.round(budget * 100) / 100,
   };
   if (!latestMetrics || typeof latestMetrics !== 'object') return emptyMetrics;
 
@@ -136,6 +139,10 @@ export const calculateProjectMetrics = (bac, latestMetrics) => {
     tcpiEac = (budget - ev) / (eacOptimistic - ac);
   }
 
+  // EAC "excepcional" (atípico): asume que la variación de costo actual fue un hecho
+  // puntual y que el trabajo restante se hará al ritmo originalmente planeado.
+  const eacAtypical = ac + (budget - ev);
+
   const round2 = (value) => Math.round(value * 100) / 100;
   const roundIndex = (value) => value === null ? null : parseFloat(toFiniteNumber(value).toFixed(2));
   const roundNullable = (value) => value === null || !Number.isFinite(value) ? null : round2(value);
@@ -155,6 +162,41 @@ export const calculateProjectMetrics = (bac, latestMetrics) => {
     vac: roundNullable(vac),
     tcpi_bac: roundIndex(tcpiBac),
     tcpi_eac: roundIndex(tcpiEac),
+    eac_atypical: round2(eacAtypical),
+    wr: round2(budget - ev),
+    fr: round2(budget - ac),
+  };
+};
+
+// Regresión lineal simple (mínimos cuadrados) — pronostica el AC futuro a partir de los
+// cortes históricos, en vez de depender solo de un único punto (CPI actual). Necesita al
+// menos 2 puntos; con menos de 3 el ajuste es poco confiable para proyectar.
+// points: [{ x, y }] — x = día desde el inicio del proyecto, y = AC en esa fecha de corte.
+export const linearRegression = (points) => {
+  const valid = (points ?? []).filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+  const n = valid.length;
+  if (n < 2) return null;
+
+  const sumX = valid.reduce((s, p) => s + p.x, 0);
+  const sumY = valid.reduce((s, p) => s + p.y, 0);
+  const sumXY = valid.reduce((s, p) => s + p.x * p.y, 0);
+  const sumX2 = valid.reduce((s, p) => s + p.x * p.x, 0);
+  const denom = n * sumX2 - sumX * sumX;
+  if (denom === 0) return null;
+
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  const meanY = sumY / n;
+  const ssTot = valid.reduce((s, p) => s + (p.y - meanY) ** 2, 0);
+  const ssRes = valid.reduce((s, p) => s + (p.y - (slope * p.x + intercept)) ** 2, 0);
+  const rSquared = ssTot > 0 ? 1 - ssRes / ssTot : 1;
+
+  return {
+    slope,
+    intercept,
+    rSquared,
+    pointCount: n,
+    predict: (x) => slope * x + intercept,
   };
 };
 
