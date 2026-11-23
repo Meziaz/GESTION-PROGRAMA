@@ -40,41 +40,41 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     databaseConfigured: Boolean(process.env.DATABASE_URL || process.env.DB_HOST),
-    aiConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    aiConfigured: Boolean(process.env.GROQ_API_KEY),
   });
 });
 
 // ============================================================================
 // ASISTENTE DE IA (Análisis de viabilidad)
 // Toda la llamada al proveedor de IA vive en esta única función. Para cambiar
-// de proveedor (ej. si se agotan los créditos de Claude) solo hay que
+// de proveedor (ej. si se agotan los créditos/límites de Groq) solo hay que
 // reemplazar el cuerpo de callAI por la API del otro servicio — el resto del
 // backend y el frontend no se enteran de qué proveedor hay detrás.
 // ============================================================================
 const callAI = async (prompt) => {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    throw new Error('No hay una clave de IA configurada en el servidor (ANTHROPIC_API_KEY en .env.local).');
+    throw new Error('No hay una clave de IA configurada en el servidor (GROQ_API_KEY en .env.local).');
   }
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1200,
+      model: 'openai/gpt-oss-20b',
       messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 1200,
     }),
   });
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody?.error?.message || `La IA respondió con error ${response.status}.`);
+    throw new Error(errorBody?.error?.message || `Groq respondió con error ${response.status}.`);
   }
   const data = await response.json();
-  return (data.content ?? []).map((block) => block.text ?? '').join('').trim();
+  return (data.choices?.[0]?.message?.content ?? '').trim();
 };
 
 app.post('/api/ai/feasibility', async (req, res) => {

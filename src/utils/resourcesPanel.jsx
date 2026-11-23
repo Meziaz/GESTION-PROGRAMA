@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Download, AlertTriangle, Wallet } from 'lucide-react';
 import { formatCurrency } from './evmCalculations';
+import { calculatePertDuration } from './criticalPathService';
 import { filterDecimal, filterFreeText } from './inputFilters';
 import { downloadCsv } from './csvExport';
 import { AlertModal } from './AlertModal';
@@ -181,9 +182,31 @@ export function ResourcesPanel({ project, onSave }) {
   const managementReserveAmount = totalEstimated * (toNumber(managementReservePct) / 100);
   const totalAuthorization = totalEstimated + managementReserveAmount; // fuera de la línea base
 
+  // Guardar recursos SIEMPRE reparte su costo a las tareas del EDT cuyo
+  // "responsable" coincida con el nombre del recurso (tarifa cargada por día ×
+  // duración PERT de la tarea). Así "Costeo (Recursos)" y el EVM bottom-up de
+  // "EDT y Cronograma" quedan conectados automáticamente con una sola acción:
+  // no existe un botón aparte de "sincronizar".
   const handleSave = async () => {
     setSaving(true);
     try {
+      const rateByName = new Map(
+        computedResources
+          .filter((r) => String(r.name ?? '').trim())
+          .map((r) => [String(r.name).trim().toLowerCase(), r.dayValue]),
+      );
+      let updatedCount = 0;
+      const nextPhases = (project.wbs_phases ?? []).map((phase) => ({
+        ...phase,
+        activities: (phase.activities ?? []).map((activity) => {
+          const key = String(activity.responsable ?? '').trim().toLowerCase();
+          const rate = rateByName.get(key);
+          if (!key || rate === undefined) return activity;
+          const duration = calculatePertDuration(activity);
+          updatedCount += 1;
+          return { ...activity, cost: Math.round(rate * duration * 100) / 100 };
+        }),
+      }));
       const saved = await onSave({
         ...project,
         resource_settings: settings,
@@ -191,8 +214,14 @@ export function ResourcesPanel({ project, onSave }) {
         cost_items: costItems,
         contingency_percentage: toNumber(contingencyPct),
         management_reserve_percentage: toNumber(managementReservePct),
+        wbs_phases: nextPhases,
       });
-      setAlert({ type: 'success', message: 'Recursos y costos guardados correctamente.' });
+      setAlert({
+        type: 'success',
+        message: updatedCount > 0
+          ? `Recursos y costos guardados. Costo recalculado automáticamente en ${updatedCount} tarea(s) del EDT (tarifa/día × duración de cada tarea).`
+          : 'Recursos y costos guardados correctamente.',
+      });
       return saved;
     } catch (error) {
       setAlert({ type: 'error', message: `No se pudo guardar: ${error.message}` });
@@ -335,6 +364,9 @@ export function ResourcesPanel({ project, onSave }) {
         )}
         <div className="mt-3 text-right text-sm font-semibold text-gray-900">Subtotal mano de obra: {formatCurrency(subtotalMO)}</div>
         <p className="mt-1 text-xs text-gray-500">"Dedicación %" escala los días a "días efectivos" (ej. 50% de dedicación en 20 días = 10 días efectivos de costo). La columna "Cronograma" compara los días costeados aquí (sin escalar) contra la suma de duraciones del WBS cuyo responsable coincide con el nombre del recurso.</p>
+        <p className="mt-2 rounded-lg border border-blueprint-100 bg-blueprint-50/60 p-3 text-xs text-gray-600">
+          Al guardar, el costo de cada tarea del EDT se recalcula automáticamente (tarifa/día del recurso × duración), usando el campo "Responsable" de cada tarea para saber a quién cobrarle. "EDT y Cronograma" y este costeo quedan siempre sincronizados — no hace falta un botón aparte.
+        </p>
       </div>
 
       <CostItemsTable title="Tecnología / infraestructura" hint="Cloud, licencias, certificados, equipos..." items={costItems.technology} onChange={(items) => setCostItems((c) => ({ ...c, technology: items }))} prefix="tech" />

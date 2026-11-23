@@ -12,7 +12,7 @@ proyectos, no cada quien en su navegador.
 
 - **Node.js 18 o superior** (probado con Node 20 y 24) y npm.
 - **PostgreSQL 12 o superior**, instalado y corriendo localmente (o accesible por red).
-- Una clave de **Anthropic (Claude)** — *opcional*, solo para el botón "Analizar con IA"
+- Una clave de **Groq** — *opcional*, solo para el botón "Analizar con IA"
   del Resumen ejecutivo. Sin ella, el resto de la app funciona igual.
 
 ## Instalación
@@ -40,7 +40,7 @@ Edita `.env.local`:
 DATABASE_URL=postgresql://postgres:tu_password@localhost:5432/evm_projects_db
 
 # Opcional — solo para el Asistente de IA
-ANTHROPIC_API_KEY=sk-ant-tu-clave-aqui
+GROQ_API_KEY=gsk_tu-clave-aqui
 ```
 
 Si no usas `DATABASE_URL`, puedes usar en su lugar `DB_HOST`, `DB_PORT`, `DB_NAME`,
@@ -84,7 +84,7 @@ Abre la URL que imprime Vite — normalmente **http://localhost:5173**.
   {"status":"ok","databaseConfigured":true,"aiConfigured":true}
   ```
   Si `databaseConfigured` sale en `false`, revisa `DATABASE_URL`/`DB_*` en `.env.local`.
-  Si `aiConfigured` sale en `false`, es porque no pusiste `ANTHROPIC_API_KEY` — no es un error, solo desactiva el botón de IA.
+  Si `aiConfigured` sale en `false`, es porque no pusiste `GROQ_API_KEY` en `.env.local` — no es un error, solo desactiva el botón de IA.
 
 ## Módulos de la aplicación
 
@@ -110,7 +110,7 @@ de CPI/SPI entre todos los proyectos del portafolio.
 - **"No se pudo conectar con el servidor" en el Dashboard** → el backend (`npm run server`) no está corriendo, o PostgreSQL no está levantado.
 - **`npm run server` falla con `EADDRINUSE`** → ya hay algo usando el puerto 3000. Ciérralo o cambia `PORT` en `.env.local`.
 - **`npm run db:init` falla al conectar** → revisa que PostgreSQL esté corriendo y que el usuario/password en `.env.local` sean correctos.
-- **El botón "Analizar con IA" muestra un error de crédito** → tu cuenta de Anthropic no tiene saldo. Entra a console.anthropic.com → Plans & Billing → agrega crédito. No es un bug de la app.
+- **El botón "Analizar con IA" muestra un error** → revisa que `GROQ_API_KEY` esté correctamente configurada en `.env.local`. Si la clave es válida pero falla, puede ser un límite temporal de tasa (rate limit) de Groq; espera unos segundos e intenta de nuevo. No es un bug de la app.
 
 ## Scripts disponibles
 
